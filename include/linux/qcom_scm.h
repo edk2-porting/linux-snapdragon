@@ -109,6 +109,12 @@ extern int qcom_scm_hdcp_req(struct qcom_scm_hdcp_req *req, u32 req_cnt,
 			     u32 *resp);
 
 extern int qcom_scm_qsmmu500_wait_safe_toggle(bool en);
+
+extern int qcom_scm_lmh_limit_dcvsh(u32 *payload, u32 payload_size, u64 limit_node,
+				    u32 node_id, u64 version);
+extern int qcom_scm_lmh_limit_profile_change(u32 profile_id);
+extern bool qcom_scm_limit_dcvsh_available(void);
+
 #else
 
 #include <linux/errno.h>
@@ -170,5 +176,10 @@ static inline int qcom_scm_hdcp_req(struct qcom_scm_hdcp_req *req, u32 req_cnt,
 
 static inline int qcom_scm_qsmmu500_wait_safe_toggle(bool en)
 		{ return -ENODEV; }
+
+int qcom_scm_lmh_limit_dcvsh(u32 *payload, u32 payload_size, u64 limit_node,
+			     u32 node_id, u64 version)
+		{ return -ENODEV; }
+int qcom_scm_lmh_limit_profile_change(u32 profile_id) { return -ENODEV; }
 #endif
 #endif
