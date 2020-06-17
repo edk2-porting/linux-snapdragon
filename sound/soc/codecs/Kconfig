@@ -303,6 +303,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_WM9713
 	imply SND_SOC_WSA881X
 	imply SND_SOC_ZL38060
+	imply SND_SOC_TAS2559
 	help
 	  Normally ASoC codec drivers are only built if a machine driver which
 	  uses them is also built since they are only usable with a machine
@@ -2017,6 +2018,10 @@ config SND_SOC_LPASS_VA_MACRO
 	depends on COMMON_CLK
 	select REGMAP_MMIO
 	tristate "Qualcomm VA Macro in LPASS(Low Power Audio SubSystem)"
+
+config SND_SOC_TAS2559
+	tristate "Texas Instruments TAS2559 speaker amplifier"
+	depends on I2C
 
 config SND_SOC_LPASS_RX_MACRO
 	depends on COMMON_CLK
