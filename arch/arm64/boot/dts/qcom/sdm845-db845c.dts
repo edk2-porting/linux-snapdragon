@@ -420,6 +420,10 @@
 			   <GCC_LPASS_SWAY_CLK>;
 };
 
+&gpi_dma0 {
+	status = "okay";
+};
+
 &gpu {
 	zap-shader {
 		memory-region = <&gpu_mem>;
