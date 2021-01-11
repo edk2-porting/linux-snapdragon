@@ -12,6 +12,7 @@
 enum geni_se_xfer_mode {
 	GENI_SE_INVALID,
 	GENI_SE_FIFO,
+	GENI_GPI_DMA,
 	GENI_SE_DMA,
 };
 
@@ -121,6 +122,9 @@ struct geni_se {
 #define SER_CLK_EN			BIT(0)
 #define CLK_DIV_MSK			GENMASK(15, 4)
 #define CLK_DIV_SHFT			4
+
+/* GENI_IF_DISABLE_RO fields */
+#define FIFO_IF_DISABLE			(BIT(0))
 
 /* GENI_FW_REVISION_RO fields */
 #define FW_REV_PROTOCOL_MSK		GENMASK(15, 8)
