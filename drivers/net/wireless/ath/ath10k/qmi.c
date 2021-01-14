@@ -653,7 +653,11 @@ static int ath10k_qmi_host_cap_send_sync(struct ath10k_qmi *qmi)
 
 	/* older FW didn't support this request, which is not fatal */
 	if (resp.resp.result != QMI_RESULT_SUCCESS_V01 &&
-	    resp.resp.error != QMI_ERR_NOT_SUPPORTED_V01) {
+	    resp.resp.error != QMI_ERR_NOT_SUPPORTED_V01 &&
+	    !of_machine_is_compatible("xiaomi,beryllium") &&
+	    !of_machine_is_compatible("xiaomi,dipper") &&
+	    !of_machine_is_compatible("xiaomi,polairs") &&
+	    !of_machine_is_compatible("xiaomi,perseus")) {
 		ath10k_err(ar, "host capability request rejected: %d\n", resp.resp.error);
 		ret = -EINVAL;
 		goto out;
