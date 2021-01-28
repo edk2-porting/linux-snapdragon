@@ -164,6 +164,18 @@ config INPUT_PM8XXX_VIBRATOR
 	  To compile this driver as module, choose M here: the
 	  module will be called pm8xxx-vibrator.
 
+config INPUT_PMI8998_HAPTICS
+	tristate "Qualcomm PMI8998 HAPTICS"
+	depends on ARCH_QCOM
+	select INPUT_FF_MEMLESS
+	help
+	  This option enabled support for the haptics found in pmi8998 PMICs.
+	  Based on the ff-memless interface. Currently this driver provides
+	  a partial implementation and ONLY supports SDM845 SoCs.
+
+	  To compile this driver as module, choose M here: the
+	  module will be called pmi8998-haptics.
+
 config INPUT_PMIC8XXX_PWRKEY
 	tristate "PMIC8XXX power key support"
 	depends on MFD_PM8XXX
