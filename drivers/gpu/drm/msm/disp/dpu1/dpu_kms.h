@@ -154,6 +154,15 @@ struct vsync_info {
 
 #define to_dpu_global_state(x) container_of(x, struct dpu_global_state, base)
 
+/**
+ * dpu_supports_bw_scaling: returns true for drivers that support bw scaling.
+ * @dev: Pointer to drm_device structure
+ */
+static inline int dpu_supports_bw_scaling(struct drm_device *dev)
+{
+	return of_device_is_compatible(dev->dev->of_node, "qcom,sc7180-mdss");
+}
+
 /* Global private object state for tracking resources that are shared across
  * multiple kms objects (planes/crtcs/etc).
  */
