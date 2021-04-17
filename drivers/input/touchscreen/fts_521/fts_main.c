@@ -6527,6 +6527,7 @@ static const struct i2c_device_id fts_device_id[] = {
 	{FTS_TS_DRV_NAME, 0},
 	{}
 };
+MODULE_DEVICE_TABLE(i2c, fts_device_id);
 
 static struct i2c_driver fts_i2c_driver = {
 	.driver = {
