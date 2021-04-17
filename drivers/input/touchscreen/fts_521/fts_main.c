@@ -65,7 +65,6 @@
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
 #include <linux/debugfs.h>
-#include <linux/hwinfo.h>
 #ifdef KERNEL_ABOVE_2_6_38
 #include <linux/input/mt.h>
 #endif
