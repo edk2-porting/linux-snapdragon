@@ -158,7 +158,6 @@ static int fts_init_sensing(struct fts_ts_info *info);
 static int fts_mode_handler(struct fts_ts_info *info, int force);
 static int fts_chip_initialization(struct fts_ts_info *info, int init_type);
 static const char *fts_get_limit(struct fts_ts_info *info);
-extern const char *dsi_get_display_name(void);
 
 static irqreturn_t fts_event_handler(int irq, void *ts_info);
 bool wait_queue_complete;
@@ -5353,8 +5352,6 @@ static int parse_dt(struct device *dev, struct fts_hw_platform_data *bdata)
 		return -ENOMEM;
 	}
 
-	bdata->check_display_name = of_property_read_bool(np, "fts,check-display-name");
-
 	config_info = bdata->config_array;
 	for_each_child_of_node(np, temp) {
 		retval = of_property_read_u32(temp, "fts,tp-vendor", &temp_val);
@@ -6008,7 +6005,6 @@ static int fts_probe(struct spi_device *client)
 	int skip_5_1 = 0;
 	u16 bus_type;
 	u8 *tp_maker;
-	const char *display_name;
 
 	logError(1, "%s %s: driver ver: %s\n", tag, __func__,
 		 FTS_TS_DRV_VERSION);
@@ -6065,16 +6061,6 @@ static int fts_probe(struct spi_device *client)
 			goto ProbeErrorExit_1;
 		}
 		parse_dt(&client->dev, info->board);
-	}
-	if (info->board->check_display_name) {
-		display_name = dsi_get_display_name();
-		if (display_name) {
-			logError(1, "%s display_name:%s\n", tag, display_name);
-			if (strncmp(display_name, "dsi_samsung", 11)) {
-				logError(1, "%s not the right display, do not need to do probe%s\n", tag);
-				return -EINVAL;
-			}
-		}
 	}
 
 	logError(0, "%s SET Regulators: \n", tag);
