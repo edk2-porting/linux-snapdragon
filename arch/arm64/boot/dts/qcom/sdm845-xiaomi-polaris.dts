@@ -359,15 +359,14 @@
 	};
 };
 
-// Uncomment the following nodes when GPI gets supported
 
-// &gpi_dma0 {
-	// status = "okay";
-// };
+&gpi_dma0 {
+	status = "okay";
+};
 
-// &gpi_dma1 {
-	// status = "okay";
-// };
+&gpi_dma1 {
+	status = "okay";
+};
 
 &gcc {
 	protected-clocks = <GCC_QSPI_CORE_CLK>,
@@ -405,15 +404,14 @@
 };
 
 /* touchscreen */
-// Enable it when GPI is working
 &i2c14 {
-	// #dma-cells = <3>;
-	status = "disabled";
+	#dma-cells = <3>;
+	status = "okay";
 	clock-frequency = <400000>;
 
-	// dmas =  <&gpi_dma1 0 6 QCOM_GPI_I2C>,
-	//     <&gpi_dma1 1 6 QCOM_GPI_I2C>;
-	// dma-names = "tx", "rx";
+	dmas =  <&gpi_dma1 0 6 QCOM_GPI_I2C>,
+	        <&gpi_dma1 1 6 QCOM_GPI_I2C>;
+	dma-names = "tx", "rx";
 
 	touchscreen: synaptics-dsi-i2c@20 {
 		compatible = "syna,rmi4-i2c";
