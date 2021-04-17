@@ -28,7 +28,7 @@
 #include "ftsTest.h"
 #include "ftsTime.h"
 #include "ftsTool.h"
-#include "../fts.h"
+#include "fts.h"
 
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -43,7 +43,7 @@
 #include <linux/firmware.h>
 
 #ifdef LIMITS_H_FILE
-#include "../fts_limits.h"
+#include "fts_limits.h"
 #endif
 
 TestToDo tests;

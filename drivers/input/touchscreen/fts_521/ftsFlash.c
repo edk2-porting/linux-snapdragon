@@ -28,7 +28,7 @@
 #include "ftsTest.h"
 #include "ftsTime.h"
 #include "ftsTool.h"
-#include "../fts.h"
+#include "fts.h"
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -44,7 +44,7 @@
 #include <linux/firmware.h>
 
 #ifdef FW_H_FILE
-#include "../fts_fw.h"
+#include "fts_fw.h"
 #endif
 
 extern SysInfo systemInfo;

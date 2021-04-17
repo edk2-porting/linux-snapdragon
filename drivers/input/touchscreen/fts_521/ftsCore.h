@@ -23,7 +23,7 @@
 
 #include "ftsHardware.h"
 #include "ftsSoftware.h"
-#include "../fts.h"
+#include "fts.h"
 
 /*HW DATA*/
 #define GPIO_NOT_DEFINED					-1									/*value assumed by reset_gpio when the reset pin of the IC is not connected*/

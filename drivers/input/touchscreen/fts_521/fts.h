@@ -36,8 +36,8 @@
 #include <linux/sysfs.h>
 #include <linux/notifier.h>
 #include <linux/mutex.h>
-#include "fts_lib/ftsSoftware.h"
-#include "fts_lib/ftsHardware.h"
+#include "ftsSoftware.h"
+#include "ftsHardware.h"
 #include <linux/completion.h>
 /****************** CONFIGURATION SECTION ******************/
 /** @defgroup conf_section	 Driver Configuration Section

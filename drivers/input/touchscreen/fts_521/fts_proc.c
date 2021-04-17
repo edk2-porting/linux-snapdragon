@@ -28,15 +28,15 @@
 #include <linux/delay.h>
 #include <linux/uaccess.h>
 #include "fts.h"
-#include "fts_lib/ftsCompensation.h"
-#include "fts_lib/ftsCore.h"
-#include "fts_lib/ftsIO.h"
-#include "fts_lib/ftsError.h"
-#include "fts_lib/ftsFrame.h"
-#include "fts_lib/ftsFlash.h"
-#include "fts_lib/ftsTest.h"
-#include "fts_lib/ftsTime.h"
-#include "fts_lib/ftsTool.h"
+#include "ftsCompensation.h"
+#include "ftsCore.h"
+#include "ftsIO.h"
+#include "ftsError.h"
+#include "ftsFrame.h"
+#include "ftsFlash.h"
+#include "ftsTest.h"
+#include "ftsTime.h"
+#include "ftsTool.h"
 
 #define DRIVER_TEST_FILE_NODE								"driver_test"
 #define CHUNK_PROC											1024

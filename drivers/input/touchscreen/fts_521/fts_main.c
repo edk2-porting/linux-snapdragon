@@ -71,16 +71,16 @@
 #endif
 
 #include "fts.h"
-#include "fts_lib/ftsCompensation.h"
-#include "fts_lib/ftsCore.h"
-#include "fts_lib/ftsIO.h"
-#include "fts_lib/ftsError.h"
-#include "fts_lib/ftsFlash.h"
-#include "fts_lib/ftsFrame.h"
-#include "fts_lib/ftsGesture.h"
-#include "fts_lib/ftsTest.h"
-#include "fts_lib/ftsTime.h"
-#include "fts_lib/ftsTool.h"
+#include "ftsCompensation.h"
+#include "ftsCore.h"
+#include "ftsIO.h"
+#include "ftsError.h"
+#include "ftsFlash.h"
+#include "ftsFrame.h"
+#include "ftsGesture.h"
+#include "ftsTest.h"
+#include "ftsTime.h"
+#include "ftsTool.h"
 #ifdef CONFIG_INPUT_PRESS_NDT
 #include "./../ndt_core.h"
 #endif

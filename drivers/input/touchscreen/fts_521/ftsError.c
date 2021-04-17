@@ -24,7 +24,7 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 
-#include "../fts.h"
+#include "fts.h"
 #include "ftsCore.h"
 #include "ftsError.h"
 #include "ftsIO.h"
