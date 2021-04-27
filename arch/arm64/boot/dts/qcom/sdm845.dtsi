@@ -3691,6 +3691,16 @@
 			};
 		};
 
+		lmh_cluster1: lmh@17d70800 {
+			compatible = "qcom,msm-hw-limits";
+			qcom,node-id = <0x6370312D>;
+		};
+
+		lmh_cluster0: lmh@17d78800 {
+			compatible = "qcom,msm-hw-limits";
+			qcom,node-id = <0x6370302D>;
+		};
+
 		sound: sound {
 		};
 
