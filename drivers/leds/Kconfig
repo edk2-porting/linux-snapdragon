@@ -931,6 +931,9 @@ config LEDS_ACER_A500
 comment "Flash and Torch LED drivers"
 source "drivers/leds/flash/Kconfig"
 
+comment "RGB LED drivers"
+source "drivers/leds/rgb/Kconfig"
+
 comment "LED Triggers"
 source "drivers/leds/trigger/Kconfig"
 
