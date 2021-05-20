@@ -2145,16 +2145,143 @@ void ice_cfg_sw_lldp(struct ice_vsi *vsi, bool tx, bool create)
 	dev = ice_pf_to_dev(pf);
 	eth_fltr = create ? ice_fltr_add_eth : ice_fltr_remove_eth;
 
-	if (tx)
+	if (tx) {
 		status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_TX,
 				  ICE_DROP_PACKET);
-	else
-		status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_RX, ICE_FWD_TO_VSI);
+	} else {
+		if (ice_fw_supports_lldp_fltr_ctrl(&pf->hw)) {
+			status = ice_lldp_fltr_add_remove(&pf->hw, vsi->vsi_num,
+							  create);
+		} else {
+			status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_RX,
+					  ICE_FWD_TO_VSI);
+		}
+	}
 
 	if (status)
 		dev_err(dev, "Fail %s %s LLDP rule on VSI %i error: %s\n",
 			create ? "adding" : "removing", tx ? "TX" : "RX",
 			vsi->vsi_num, ice_stat_str(status));
+}
+
+/**
+ * ice_set_agg_vsi - sets up scheduler aggregator node and move VSI into it
+ * @vsi: pointer to the VSI
+ *
+ * This function will allocate new scheduler aggregator now if needed and will
+ * move specified VSI into it.
+ */
+static void ice_set_agg_vsi(struct ice_vsi *vsi)
+{
+	struct device *dev = ice_pf_to_dev(vsi->back);
+	struct ice_agg_node *agg_node_iter = NULL;
+	u32 agg_id = ICE_INVALID_AGG_NODE_ID;
+	struct ice_agg_node *agg_node = NULL;
+	int node_offset, max_agg_nodes = 0;
+	struct ice_port_info *port_info;
+	struct ice_pf *pf = vsi->back;
+	u32 agg_node_id_start = 0;
+	enum ice_status status;
+
+	/* create (as needed) scheduler aggregator node and move VSI into
+	 * corresponding aggregator node
+	 * - PF aggregator node to contains VSIs of type _PF and _CTRL
+	 * - VF aggregator nodes will contain VF VSI
+	 */
+	port_info = pf->hw.port_info;
+	if (!port_info)
+		return;
+
+	switch (vsi->type) {
+	case ICE_VSI_CTRL:
+	case ICE_VSI_LB:
+	case ICE_VSI_PF:
+		max_agg_nodes = ICE_MAX_PF_AGG_NODES;
+		agg_node_id_start = ICE_PF_AGG_NODE_ID_START;
+		agg_node_iter = &pf->pf_agg_node[0];
+		break;
+	case ICE_VSI_VF:
+		/* user can create 'n' VFs on a given PF, but since max children
+		 * per aggregator node can be only 64. Following code handles
+		 * aggregator(s) for VF VSIs, either selects a agg_node which
+		 * was already created provided num_vsis < 64, otherwise
+		 * select next available node, which will be created
+		 */
+		max_agg_nodes = ICE_MAX_VF_AGG_NODES;
+		agg_node_id_start = ICE_VF_AGG_NODE_ID_START;
+		agg_node_iter = &pf->vf_agg_node[0];
+		break;
+	default:
+		/* other VSI type, handle later if needed */
+		dev_dbg(dev, "unexpected VSI type %s\n",
+			ice_vsi_type_str(vsi->type));
+		return;
+	}
+
+	/* find the appropriate aggregator node */
+	for (node_offset = 0; node_offset < max_agg_nodes; node_offset++) {
+		/* see if we can find space in previously created
+		 * node if num_vsis < 64, otherwise skip
+		 */
+		if (agg_node_iter->num_vsis &&
+		    agg_node_iter->num_vsis == ICE_MAX_VSIS_IN_AGG_NODE) {
+			agg_node_iter++;
+			continue;
+		}
+
+		if (agg_node_iter->valid &&
+		    agg_node_iter->agg_id != ICE_INVALID_AGG_NODE_ID) {
+			agg_id = agg_node_iter->agg_id;
+			agg_node = agg_node_iter;
+			break;
+		}
+
+		/* find unclaimed agg_id */
+		if (agg_node_iter->agg_id == ICE_INVALID_AGG_NODE_ID) {
+			agg_id = node_offset + agg_node_id_start;
+			agg_node = agg_node_iter;
+			break;
+		}
+		/* move to next agg_node */
+		agg_node_iter++;
+	}
+
+	if (!agg_node)
+		return;
+
+	/* if selected aggregator node was not created, create it */
+	if (!agg_node->valid) {
+		status = ice_cfg_agg(port_info, agg_id, ICE_AGG_TYPE_AGG,
+				     (u8)vsi->tc_cfg.ena_tc);
+		if (status) {
+			dev_err(dev, "unable to create aggregator node with agg_id %u\n",
+				agg_id);
+			return;
+		}
+		/* aggregator node is created, store the neeeded info */
+		agg_node->valid = true;
+		agg_node->agg_id = agg_id;
+	}
+
+	/* move VSI to corresponding aggregator node */
+	status = ice_move_vsi_to_agg(port_info, agg_id, vsi->idx,
+				     (u8)vsi->tc_cfg.ena_tc);
+	if (status) {
+		dev_err(dev, "unable to move VSI idx %u into aggregator %u node",
+			vsi->idx, agg_id);
+		return;
+	}
+
+	/* keep active children count for aggregator node */
+	agg_node->num_vsis++;
+
+	/* cache the 'agg_id' in VSI, so that after reset - VSI will be moved
+	 * to aggregator node
+	 */
+	vsi->agg_node = agg_node;
+	dev_dbg(dev, "successfully moved VSI idx %u tc_bitmap 0x%x) into aggregator node %d which has num_vsis %u\n",
+		vsi->idx, vsi->tc_cfg.ena_tc, vsi->agg_node->agg_id,
+		vsi->agg_node->num_vsis);
 }
 
 /**
@@ -2327,6 +2454,8 @@ ice_vsi_setup(struct ice_pf *pf, struct ice_port_info *pi,
 			ice_cfg_sw_lldp(vsi, true, true);
 		}
 
+	if (!vsi->agg_node)
+		ice_set_agg_vsi(vsi);
 	return vsi;
 
 unroll_clear_rings:
@@ -2342,6 +2471,8 @@ unroll_vsi_init:
 unroll_get_qs:
 	ice_vsi_put_qs(vsi);
 unroll_vsi_alloc:
+	if (vsi_type == ICE_VSI_VF)
+		ice_enable_lag(pf->lag);
 	ice_vsi_clear(vsi);
 
 	return NULL;
@@ -2669,6 +2800,9 @@ int ice_vsi_release(struct ice_vsi *vsi)
 		vsi->netdev = NULL;
 	}
 
+	if (vsi->type == ICE_VSI_VF &&
+	    vsi->agg_node && vsi->agg_node->valid)
+		vsi->agg_node->num_vsis--;
 	ice_vsi_clear_rings(vsi);
 
 	ice_vsi_put_qs(vsi);
@@ -2684,36 +2818,44 @@ int ice_vsi_release(struct ice_vsi *vsi)
 }
 
 /**
- * ice_vsi_rebuild_update_coalesce - set coalesce for a q_vector
+ * ice_vsi_rebuild_update_coalesce_intrl - set interrupt rate limit for a q_vector
  * @q_vector: pointer to q_vector which is being updated
- * @coalesce: pointer to array of struct with stored coalesce
+ * @stored_intrl_setting: original INTRL setting
  *
  * Set coalesce param in q_vector and update these parameters in HW.
  */
 static void
-ice_vsi_rebuild_update_coalesce(struct ice_q_vector *q_vector,
-				struct ice_coalesce_stored *coalesce)
+ice_vsi_rebuild_update_coalesce_intrl(struct ice_q_vector *q_vector,
+				      u16 stored_intrl_setting)
 {
-	struct ice_ring_container *rx_rc = &q_vector->rx;
-	struct ice_ring_container *tx_rc = &q_vector->tx;
 	struct ice_hw *hw = &q_vector->vsi->back->hw;
 
-	tx_rc->itr_setting = coalesce->itr_tx;
-	rx_rc->itr_setting = coalesce->itr_rx;
-
-	/* dynamic ITR values will be updated during Tx/Rx */
-	if (!ITR_IS_DYNAMIC(tx_rc->itr_setting))
-		wr32(hw, GLINT_ITR(tx_rc->itr_idx, q_vector->reg_idx),
-		     ITR_REG_ALIGN(tx_rc->itr_setting) >>
-		     ICE_ITR_GRAN_S);
-	if (!ITR_IS_DYNAMIC(rx_rc->itr_setting))
-		wr32(hw, GLINT_ITR(rx_rc->itr_idx, q_vector->reg_idx),
-		     ITR_REG_ALIGN(rx_rc->itr_setting) >>
-		     ICE_ITR_GRAN_S);
-
-	q_vector->intrl = coalesce->intrl;
+	q_vector->intrl = stored_intrl_setting;
 	wr32(hw, GLINT_RATE(q_vector->reg_idx),
 	     ice_intrl_usec_to_reg(q_vector->intrl, hw->intrl_gran));
+}
+
+/**
+ * ice_vsi_rebuild_update_coalesce_itr - set coalesce for a q_vector
+ * @q_vector: pointer to q_vector which is being updated
+ * @rc: pointer to ring container
+ * @stored_itr_setting: original ITR setting
+ *
+ * Set coalesce param in q_vector and update these parameters in HW.
+ */
+static void
+ice_vsi_rebuild_update_coalesce_itr(struct ice_q_vector *q_vector,
+				    struct ice_ring_container *rc,
+				    u16 stored_itr_setting)
+{
+	struct ice_hw *hw = &q_vector->vsi->back->hw;
+
+	rc->itr_setting = stored_itr_setting;
+
+	/* dynamic ITR values will be updated during Tx/Rx */
+	if (!ITR_IS_DYNAMIC(rc->itr_setting))
+		wr32(hw, GLINT_ITR(rc->itr_idx, q_vector->reg_idx),
+		     ITR_REG_ALIGN(rc->itr_setting) >> ICE_ITR_GRAN_S);
 }
 
 /**
@@ -2735,6 +2877,11 @@ ice_vsi_rebuild_get_coalesce(struct ice_vsi *vsi,
 		coalesce[i].itr_tx = q_vector->tx.itr_setting;
 		coalesce[i].itr_rx = q_vector->rx.itr_setting;
 		coalesce[i].intrl = q_vector->intrl;
+
+		if (i < vsi->num_txq)
+			coalesce[i].tx_valid = true;
+		if (i < vsi->num_rxq)
+			coalesce[i].rx_valid = true;
 	}
 
 	return vsi->num_q_vectors;
@@ -2759,17 +2906,59 @@ ice_vsi_rebuild_set_coalesce(struct ice_vsi *vsi,
 	if ((size && !coalesce) || !vsi)
 		return;
 
-	for (i = 0; i < size && i < vsi->num_q_vectors; i++)
-		ice_vsi_rebuild_update_coalesce(vsi->q_vectors[i],
-						&coalesce[i]);
-
-	/* number of q_vectors increased, so assume coalesce settings were
-	 * changed globally (i.e. ethtool -C eth0 instead of per-queue) and use
-	 * the previous settings from q_vector 0 for all of the new q_vectors
+	/* There are a couple of cases that have to be handled here:
+	 *   1. The case where the number of queue vectors stays the same, but
+	 *      the number of Tx or Rx rings changes (the first for loop)
+	 *   2. The case where the number of queue vectors increased (the
+	 *      second for loop)
 	 */
-	for (; i < vsi->num_q_vectors; i++)
-		ice_vsi_rebuild_update_coalesce(vsi->q_vectors[i],
-						&coalesce[0]);
+	for (i = 0; i < size && i < vsi->num_q_vectors; i++) {
+		/* There are 2 cases to handle here and they are the same for
+		 * both Tx and Rx:
+		 *   if the entry was valid previously (coalesce[i].[tr]x_valid
+		 *   and the loop variable is less than the number of rings
+		 *   allocated, then write the previous values
+		 *
+		 *   if the entry was not valid previously, but the number of
+		 *   rings is less than are allocated (this means the number of
+		 *   rings increased from previously), then write out the
+		 *   values in the first element
+		 */
+		if (i < vsi->alloc_rxq && coalesce[i].rx_valid)
+			ice_vsi_rebuild_update_coalesce_itr(vsi->q_vectors[i],
+							    &vsi->q_vectors[i]->rx,
+							    coalesce[i].itr_rx);
+		else if (i < vsi->alloc_rxq)
+			ice_vsi_rebuild_update_coalesce_itr(vsi->q_vectors[i],
+							    &vsi->q_vectors[i]->rx,
+							    coalesce[0].itr_rx);
+
+		if (i < vsi->alloc_txq && coalesce[i].tx_valid)
+			ice_vsi_rebuild_update_coalesce_itr(vsi->q_vectors[i],
+							    &vsi->q_vectors[i]->tx,
+							    coalesce[i].itr_tx);
+		else if (i < vsi->alloc_txq)
+			ice_vsi_rebuild_update_coalesce_itr(vsi->q_vectors[i],
+							    &vsi->q_vectors[i]->tx,
+							    coalesce[0].itr_tx);
+
+		ice_vsi_rebuild_update_coalesce_intrl(vsi->q_vectors[i],
+						      coalesce[i].intrl);
+	}
+
+	/* the number of queue vectors increased so write whatever is in
+	 * the first element
+	 */
+	for (; i < vsi->num_q_vectors; i++) {
+		ice_vsi_rebuild_update_coalesce_itr(vsi->q_vectors[i],
+						    &vsi->q_vectors[i]->tx,
+						    coalesce[0].itr_tx);
+		ice_vsi_rebuild_update_coalesce_itr(vsi->q_vectors[i],
+						    &vsi->q_vectors[i]->rx,
+						    coalesce[0].itr_rx);
+		ice_vsi_rebuild_update_coalesce_intrl(vsi->q_vectors[i],
+						      coalesce[0].intrl);
+	}
 }
 
 /**
@@ -2798,9 +2987,11 @@ int ice_vsi_rebuild(struct ice_vsi *vsi, bool init_vsi)
 
 	coalesce = kcalloc(vsi->num_q_vectors,
 			   sizeof(struct ice_coalesce_stored), GFP_KERNEL);
-	if (coalesce)
-		prev_num_q_vectors = ice_vsi_rebuild_get_coalesce(vsi,
-								  coalesce);
+	if (!coalesce)
+		return -ENOMEM;
+
+	prev_num_q_vectors = ice_vsi_rebuild_get_coalesce(vsi, coalesce);
+
 	ice_rm_vsi_lan_cfg(vsi->port_info, vsi->idx);
 	ice_vsi_free_q_vectors(vsi);
 

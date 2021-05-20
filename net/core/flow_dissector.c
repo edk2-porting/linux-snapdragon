@@ -23,6 +23,7 @@
 #include <linux/if_ether.h>
 #include <linux/mpls.h>
 #include <linux/tcp.h>
+#include <linux/ptp_classify.h>
 #include <net/flow_dissector.h>
 #include <scsi/fc/fc_fcoe.h>
 #include <uapi/linux/batadv_packet.h>
@@ -236,9 +237,8 @@ skb_flow_dissect_set_enc_addr_type(enum flow_dissector_key_id type,
 void
 skb_flow_dissect_ct(const struct sk_buff *skb,
 		    struct flow_dissector *flow_dissector,
-		    void *target_container,
-		    u16 *ctinfo_map,
-		    size_t mapsize)
+		    void *target_container, u16 *ctinfo_map,
+		    size_t mapsize, bool post_ct)
 {
 #if IS_ENABLED(CONFIG_NF_CONNTRACK)
 	struct flow_dissector_key_ct *key;
@@ -250,12 +250,18 @@ skb_flow_dissect_ct(const struct sk_buff *skb,
 		return;
 
 	ct = nf_ct_get(skb, &ctinfo);
-	if (!ct)
+	if (!ct && !post_ct)
 		return;
 
 	key = skb_flow_dissector_target(flow_dissector,
 					FLOW_DISSECTOR_KEY_CT,
 					target_container);
+
+	if (!ct) {
+		key->ct_state = TCA_FLOWER_KEY_CT_FLAGS_TRACKED |
+				TCA_FLOWER_KEY_CT_FLAGS_INVALID;
+		return;
+	}
 
 	if (ctinfo < mapsize)
 		key->ct_state = ctinfo_map[ctinfo];
@@ -822,8 +828,10 @@ static void __skb_flow_bpf_to_target(const struct bpf_flow_keys *flow_keys,
 		key_addrs = skb_flow_dissector_target(flow_dissector,
 						      FLOW_DISSECTOR_KEY_IPV6_ADDRS,
 						      target_container);
-		memcpy(&key_addrs->v6addrs, &flow_keys->ipv6_src,
-		       sizeof(key_addrs->v6addrs));
+		memcpy(&key_addrs->v6addrs.src, &flow_keys->ipv6_src,
+		       sizeof(key_addrs->v6addrs.src));
+		memcpy(&key_addrs->v6addrs.dst, &flow_keys->ipv6_dst,
+		       sizeof(key_addrs->v6addrs.dst));
 		key_control->addr_type = FLOW_DISSECTOR_KEY_IPV6_ADDRS;
 	}
 
@@ -1250,6 +1258,21 @@ proto_again:
 		fdret = __skb_flow_dissect_batadv(skb, key_control, data,
 						  &proto, &nhoff, hlen, flags);
 		break;
+
+	case htons(ETH_P_1588): {
+		struct ptp_header *hdr, _hdr;
+
+		hdr = __skb_header_pointer(skb, nhoff, sizeof(_hdr), data,
+					   hlen, &_hdr);
+		if (!hdr) {
+			fdret = FLOW_DISSECT_RET_OUT_BAD;
+			break;
+		}
+
+		nhoff += ntohs(hdr->message_length);
+		fdret = FLOW_DISSECT_RET_OUT_GOOD;
+		break;
+	}
 
 	default:
 		fdret = FLOW_DISSECT_RET_OUT_BAD;

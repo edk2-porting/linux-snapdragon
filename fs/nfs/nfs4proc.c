@@ -71,10 +71,6 @@
 
 #include "nfs4trace.h"
 
-#ifdef CONFIG_NFS_V4_2
-#include "nfs42.h"
-#endif /* CONFIG_NFS_V4_2 */
-
 #define NFSDBG_FACILITY		NFSDBG_PROC
 
 #define NFS4_BITMASK_SZ		3
@@ -112,9 +108,10 @@ static int nfs41_test_stateid(struct nfs_server *, nfs4_stateid *,
 static int nfs41_free_stateid(struct nfs_server *, const nfs4_stateid *,
 		const struct cred *, bool);
 #endif
-static void nfs4_bitmask_adjust(__u32 *bitmask, struct inode *inode,
-		struct nfs_server *server,
-		struct nfs4_label *label);
+static void nfs4_bitmask_set(__u32 bitmask[NFS4_BITMASK_SZ],
+			     const __u32 *src, struct inode *inode,
+			     struct nfs_server *server,
+			     struct nfs4_label *label);
 
 #ifdef CONFIG_NFS_V4_SECURITY_LABEL
 static inline struct nfs4_label *
@@ -1173,14 +1170,14 @@ int nfs4_call_sync(struct rpc_clnt *clnt,
 static void
 nfs4_inc_nlink_locked(struct inode *inode)
 {
-	NFS_I(inode)->cache_validity |= NFS_INO_INVALID_OTHER;
+	nfs_set_cache_invalid(inode, NFS_INO_INVALID_OTHER);
 	inc_nlink(inode);
 }
 
 static void
 nfs4_dec_nlink_locked(struct inode *inode)
 {
-	NFS_I(inode)->cache_validity |= NFS_INO_INVALID_OTHER;
+	nfs_set_cache_invalid(inode, NFS_INO_INVALID_OTHER);
 	drop_nlink(inode);
 }
 
@@ -1191,35 +1188,31 @@ nfs4_update_changeattr_locked(struct inode *inode,
 {
 	struct nfs_inode *nfsi = NFS_I(inode);
 
-	nfsi->cache_validity |= NFS_INO_INVALID_CTIME
-		| NFS_INO_INVALID_MTIME
-		| cache_validity;
+	cache_validity |= NFS_INO_INVALID_CTIME | NFS_INO_INVALID_MTIME;
 
 	if (cinfo->atomic && cinfo->before == inode_peek_iversion_raw(inode)) {
 		nfsi->cache_validity &= ~NFS_INO_REVAL_PAGECACHE;
 		nfsi->attrtimeo_timestamp = jiffies;
 	} else {
 		if (S_ISDIR(inode->i_mode)) {
-			nfsi->cache_validity |= NFS_INO_INVALID_DATA;
+			cache_validity |= NFS_INO_INVALID_DATA;
 			nfs_force_lookup_revalidate(inode);
 		} else {
 			if (!NFS_PROTO(inode)->have_delegation(inode,
 							       FMODE_READ))
-				nfsi->cache_validity |= NFS_INO_REVAL_PAGECACHE;
+				cache_validity |= NFS_INO_REVAL_PAGECACHE;
 		}
 
 		if (cinfo->before != inode_peek_iversion_raw(inode))
-			nfsi->cache_validity |= NFS_INO_INVALID_ACCESS |
-						NFS_INO_INVALID_ACL |
-						NFS_INO_INVALID_XATTR;
+			cache_validity |= NFS_INO_INVALID_ACCESS |
+					  NFS_INO_INVALID_ACL |
+					  NFS_INO_INVALID_XATTR;
 	}
 	inode_set_iversion_raw(inode, cinfo->after);
 	nfsi->read_cache_jiffies = timestamp;
 	nfsi->attr_gencount = nfs_inc_attr_generation_counter();
+	nfs_set_cache_invalid(inode, cache_validity);
 	nfsi->cache_validity &= ~NFS_INO_INVALID_CHANGE;
-
-	if (nfsi->cache_validity & NFS_INO_INVALID_DATA)
-		nfs_fscache_invalidate(inode);
 }
 
 void
@@ -2231,6 +2224,7 @@ static int nfs4_handle_delegation_recall_error(struct nfs_server *server, struct
 		default:
 			printk(KERN_ERR "NFS: %s: unhandled error "
 					"%d.\n", __func__, err);
+			fallthrough;
 		case 0:
 		case -ENOENT:
 		case -EAGAIN:
@@ -3598,6 +3592,7 @@ static void nfs4_close_prepare(struct rpc_task *task, void *data)
 	struct nfs4_closedata *calldata = data;
 	struct nfs4_state *state = calldata->state;
 	struct inode *inode = calldata->inode;
+	struct nfs_server *server = NFS_SERVER(inode);
 	struct pnfs_layout_hdr *lo;
 	bool is_rdonly, is_wronly, is_rdwr;
 	int call_close = 0;
@@ -3654,8 +3649,10 @@ static void nfs4_close_prepare(struct rpc_task *task, void *data)
 	if (calldata->arg.fmode == 0 || calldata->arg.fmode == FMODE_READ) {
 		/* Close-to-open cache consistency revalidation */
 		if (!nfs4_have_delegation(inode, FMODE_READ)) {
-			calldata->arg.bitmask = NFS_SERVER(inode)->cache_consistency_bitmask;
-			nfs4_bitmask_adjust(calldata->arg.bitmask, inode, NFS_SERVER(inode), NULL);
+			nfs4_bitmask_set(calldata->arg.bitmask_store,
+					 server->cache_consistency_bitmask,
+					 inode, server, NULL);
+			calldata->arg.bitmask = calldata->arg.bitmask_store;
 		} else
 			calldata->arg.bitmask = NULL;
 	}
@@ -5423,19 +5420,17 @@ bool nfs4_write_need_cache_consistency_data(struct nfs_pgio_header *hdr)
 	return nfs4_have_delegation(hdr->inode, FMODE_READ) == 0;
 }
 
-static void nfs4_bitmask_adjust(__u32 *bitmask, struct inode *inode,
-				struct nfs_server *server,
-				struct nfs4_label *label)
+static void nfs4_bitmask_set(__u32 bitmask[NFS4_BITMASK_SZ], const __u32 *src,
+			     struct inode *inode, struct nfs_server *server,
+			     struct nfs4_label *label)
 {
-
 	unsigned long cache_validity = READ_ONCE(NFS_I(inode)->cache_validity);
+	unsigned int i;
 
-	if ((cache_validity & NFS_INO_INVALID_DATA) ||
-		(cache_validity & NFS_INO_REVAL_PAGECACHE) ||
-		(cache_validity & NFS_INO_REVAL_FORCED) ||
-		(cache_validity & NFS_INO_INVALID_OTHER))
-		nfs4_bitmap_copy_adjust(bitmask, nfs4_bitmask(server, label), inode);
+	memcpy(bitmask, src, sizeof(*bitmask) * NFS4_BITMASK_SZ);
 
+	if (cache_validity & (NFS_INO_INVALID_CHANGE | NFS_INO_REVAL_PAGECACHE))
+		bitmask[0] |= FATTR4_WORD0_CHANGE;
 	if (cache_validity & NFS_INO_INVALID_ATIME)
 		bitmask[1] |= FATTR4_WORD1_TIME_ACCESS;
 	if (cache_validity & NFS_INO_INVALID_OTHER)
@@ -5444,16 +5439,22 @@ static void nfs4_bitmask_adjust(__u32 *bitmask, struct inode *inode,
 				FATTR4_WORD1_NUMLINKS;
 	if (label && label->len && cache_validity & NFS_INO_INVALID_LABEL)
 		bitmask[2] |= FATTR4_WORD2_SECURITY_LABEL;
-	if (cache_validity & NFS_INO_INVALID_CHANGE)
-		bitmask[0] |= FATTR4_WORD0_CHANGE;
 	if (cache_validity & NFS_INO_INVALID_CTIME)
 		bitmask[1] |= FATTR4_WORD1_TIME_METADATA;
 	if (cache_validity & NFS_INO_INVALID_MTIME)
 		bitmask[1] |= FATTR4_WORD1_TIME_MODIFY;
-	if (cache_validity & NFS_INO_INVALID_SIZE)
-		bitmask[0] |= FATTR4_WORD0_SIZE;
 	if (cache_validity & NFS_INO_INVALID_BLOCKS)
 		bitmask[1] |= FATTR4_WORD1_SPACE_USED;
+
+	if (nfs4_have_delegation(inode, FMODE_READ) &&
+	    !(cache_validity & NFS_INO_REVAL_FORCED))
+		bitmask[0] &= ~FATTR4_WORD0_SIZE;
+	else if (cache_validity &
+		 (NFS_INO_INVALID_SIZE | NFS_INO_REVAL_PAGECACHE))
+		bitmask[0] |= FATTR4_WORD0_SIZE;
+
+	for (i = 0; i < NFS4_BITMASK_SZ; i++)
+		bitmask[i] &= server->attr_bitmask[i];
 }
 
 static void nfs4_proc_write_setup(struct nfs_pgio_header *hdr,
@@ -5466,8 +5467,10 @@ static void nfs4_proc_write_setup(struct nfs_pgio_header *hdr,
 		hdr->args.bitmask = NULL;
 		hdr->res.fattr = NULL;
 	} else {
-		hdr->args.bitmask = server->cache_consistency_bitmask;
-		nfs4_bitmask_adjust(hdr->args.bitmask, hdr->inode, server, NULL);
+		nfs4_bitmask_set(hdr->args.bitmask_store,
+				 server->cache_consistency_bitmask,
+				 hdr->inode, server, NULL);
+		hdr->args.bitmask = hdr->args.bitmask_store;
 	}
 
 	if (!hdr->pgio_done_cb)
@@ -5921,9 +5924,9 @@ static int __nfs4_proc_set_acl(struct inode *inode, const void *buf, size_t bufl
 	 * so mark the attribute cache invalid.
 	 */
 	spin_lock(&inode->i_lock);
-	NFS_I(inode)->cache_validity |= NFS_INO_INVALID_CHANGE
-		| NFS_INO_INVALID_CTIME
-		| NFS_INO_REVAL_FORCED;
+	nfs_set_cache_invalid(inode, NFS_INO_INVALID_CHANGE |
+					     NFS_INO_INVALID_CTIME |
+					     NFS_INO_REVAL_FORCED);
 	spin_unlock(&inode->i_lock);
 	nfs_access_zap_cache(inode);
 	nfs_zap_acl_cache(inode);
@@ -6509,8 +6512,10 @@ static int _nfs4_proc_delegreturn(struct inode *inode, const struct cred *cred, 
 
 	data->args.fhandle = &data->fh;
 	data->args.stateid = &data->stateid;
-	data->args.bitmask = server->cache_consistency_bitmask;
-	nfs4_bitmask_adjust(data->args.bitmask, inode, server, NULL);
+	nfs4_bitmask_set(data->args.bitmask_store,
+			 server->cache_consistency_bitmask, inode, server,
+			 NULL);
+	data->args.bitmask = data->args.bitmask_store;
 	nfs_copy_fh(&data->fh, NFS_FH(inode));
 	nfs4_stateid_copy(&data->stateid, stateid);
 	data->res.fattr = &data->fattr;
@@ -7495,6 +7500,7 @@ nfs4_release_lockowner(struct nfs_server *server, struct nfs4_lock_state *lsp)
 #define XATTR_NAME_NFSV4_ACL "system.nfs4_acl"
 
 static int nfs4_xattr_set_nfs4_acl(const struct xattr_handler *handler,
+				   struct user_namespace *mnt_userns,
 				   struct dentry *unused, struct inode *inode,
 				   const char *key, const void *buf,
 				   size_t buflen, int flags)
@@ -7517,6 +7523,7 @@ static bool nfs4_xattr_list_nfs4_acl(struct dentry *dentry)
 #ifdef CONFIG_NFS_V4_SECURITY_LABEL
 
 static int nfs4_xattr_set_nfs4_label(const struct xattr_handler *handler,
+				     struct user_namespace *mnt_userns,
 				     struct dentry *unused, struct inode *inode,
 				     const char *key, const void *buf,
 				     size_t buflen, int flags)
@@ -7567,6 +7574,7 @@ nfs4_listxattr_nfs4_label(struct inode *inode, char *list, size_t list_len)
 
 #ifdef CONFIG_NFS_V4_2
 static int nfs4_xattr_set_nfs4_user(const struct xattr_handler *handler,
+				    struct user_namespace *mnt_userns,
 				    struct dentry *unused, struct inode *inode,
 				    const char *key, const void *buf,
 				    size_t buflen, int flags)
@@ -9709,6 +9717,7 @@ nfs4_layoutcommit_done(struct rpc_task *task, void *calldata)
 	case -NFS4ERR_BADLAYOUT:     /* no layout */
 	case -NFS4ERR_GRACE:	    /* loca_recalim always false */
 		task->tk_status = 0;
+		break;
 	case 0:
 		break;
 	default:

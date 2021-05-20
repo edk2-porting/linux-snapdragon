@@ -465,6 +465,60 @@ static void rtw_phy_ra_info_update(struct rtw_dev *rtwdev)
 	rtw_iterate_stas_atomic(rtwdev, rtw_phy_ra_info_update_iter, rtwdev);
 }
 
+static u32 rtw_phy_get_rrsr_mask(struct rtw_dev *rtwdev, u8 rate_idx)
+{
+	u8 rate_order;
+
+	rate_order = rate_idx;
+
+	if (rate_idx >= DESC_RATEVHT4SS_MCS0)
+		rate_order -= DESC_RATEVHT4SS_MCS0;
+	else if (rate_idx >= DESC_RATEVHT3SS_MCS0)
+		rate_order -= DESC_RATEVHT3SS_MCS0;
+	else if (rate_idx >= DESC_RATEVHT2SS_MCS0)
+		rate_order -= DESC_RATEVHT2SS_MCS0;
+	else if (rate_idx >= DESC_RATEVHT1SS_MCS0)
+		rate_order -= DESC_RATEVHT1SS_MCS0;
+	else if (rate_idx >= DESC_RATEMCS24)
+		rate_order -= DESC_RATEMCS24;
+	else if (rate_idx >= DESC_RATEMCS16)
+		rate_order -= DESC_RATEMCS16;
+	else if (rate_idx >= DESC_RATEMCS8)
+		rate_order -= DESC_RATEMCS8;
+	else if (rate_idx >= DESC_RATEMCS0)
+		rate_order -= DESC_RATEMCS0;
+	else if (rate_idx >= DESC_RATE6M)
+		rate_order -= DESC_RATE6M;
+	else
+		rate_order -= DESC_RATE1M;
+
+	if (rate_idx >= DESC_RATEMCS0 || rate_order == 0)
+		rate_order++;
+
+	return GENMASK(rate_order + RRSR_RATE_ORDER_CCK_LEN - 1, 0);
+}
+
+static void rtw_phy_rrsr_mask_min_iter(void *data, struct ieee80211_sta *sta)
+{
+	struct rtw_dev *rtwdev = (struct rtw_dev *)data;
+	struct rtw_sta_info *si = (struct rtw_sta_info *)sta->drv_priv;
+	struct rtw_dm_info *dm_info = &rtwdev->dm_info;
+	u32 mask = 0;
+
+	mask = rtw_phy_get_rrsr_mask(rtwdev, si->ra_report.desc_rate);
+	if (mask < dm_info->rrsr_mask_min)
+		dm_info->rrsr_mask_min = mask;
+}
+
+static void rtw_phy_rrsr_update(struct rtw_dev *rtwdev)
+{
+	struct rtw_dm_info *dm_info = &rtwdev->dm_info;
+
+	dm_info->rrsr_mask_min = RRSR_RATE_ORDER_MAX;
+	rtw_iterate_stas_atomic(rtwdev, rtw_phy_rrsr_mask_min_iter, rtwdev);
+	rtw_write32(rtwdev, REG_RRSR, dm_info->rrsr_val_init & dm_info->rrsr_mask_min);
+}
+
 static void rtw_phy_dpk_track(struct rtw_dev *rtwdev)
 {
 	struct rtw_chip_info *chip = rtwdev->chip;
@@ -561,13 +615,19 @@ static void rtw_phy_pwr_track(struct rtw_dev *rtwdev)
 	rtwdev->chip->ops->pwr_track(rtwdev);
 }
 
+static void rtw_phy_ra_track(struct rtw_dev *rtwdev)
+{
+	rtw_phy_ra_info_update(rtwdev);
+	rtw_phy_rrsr_update(rtwdev);
+}
+
 void rtw_phy_dynamic_mechanism(struct rtw_dev *rtwdev)
 {
 	/* for further calculation */
 	rtw_phy_statistics(rtwdev);
 	rtw_phy_dig(rtwdev);
 	rtw_phy_cck_pd(rtwdev);
-	rtw_phy_ra_info_update(rtwdev);
+	rtw_phy_ra_track(rtwdev);
 	rtw_phy_dpk_track(rtwdev);
 	rtw_phy_pwr_track(rtwdev);
 }
@@ -2159,6 +2219,20 @@ s8 rtw_phy_pwrtrack_get_pwridx(struct rtw_dev *rtwdev,
 		return -delta_swing_table_idx_neg[delta];
 }
 EXPORT_SYMBOL(rtw_phy_pwrtrack_get_pwridx);
+
+bool rtw_phy_pwrtrack_need_lck(struct rtw_dev *rtwdev)
+{
+	struct rtw_dm_info *dm_info = &rtwdev->dm_info;
+	u8 delta_lck;
+
+	delta_lck = abs(dm_info->thermal_avg[0] - dm_info->thermal_meter_lck);
+	if (delta_lck >= rtwdev->chip->lck_threshold) {
+		dm_info->thermal_meter_lck = dm_info->thermal_avg[0];
+		return true;
+	}
+	return false;
+}
+EXPORT_SYMBOL(rtw_phy_pwrtrack_need_lck);
 
 bool rtw_phy_pwrtrack_need_iqk(struct rtw_dev *rtwdev)
 {

@@ -105,13 +105,10 @@ int notrace unwind_frame(struct task_struct *tsk, struct stackframe *frame)
 	frame->pc = ptrauth_strip_insn_pac(frame->pc);
 
 	/*
-	 * Frames created upon entry from EL0 have NULL FP and PC values, so
-	 * don't bother reporting these. Frames created by __noreturn functions
-	 * might have a valid FP even if PC is bogus, so only terminate where
-	 * both are NULL.
+	 * This is a terminal record, so we have finished unwinding.
 	 */
 	if (!frame->fp && !frame->pc)
-		return -EINVAL;
+		return -ENOENT;
 
 	return 0;
 }

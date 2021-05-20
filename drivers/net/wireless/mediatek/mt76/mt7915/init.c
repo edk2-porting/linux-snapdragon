@@ -4,6 +4,7 @@
 #include <linux/etherdevice.h>
 #include "mt7915.h"
 #include "mac.h"
+#include "mcu.h"
 #include "eeprom.h"
 
 #define CCK_RATE(_idx, _rate) {						\
@@ -169,18 +170,19 @@ static int mt7915_txbf_init(struct mt7915_dev *dev)
 {
 	int ret;
 
-	/*
-	 * TODO: DBDC & check whether iBF phase calibration data has
-	 * been stored in eeprom offset 0x651~0x7b8, then write down
-	 * 0x1111 into 0x651 and 0x651 to trigger iBF.
-	 */
+
+	if (dev->dbdc_support) {
+		ret = mt7915_mcu_set_txbf_module(dev);
+		if (ret)
+			return ret;
+	}
 
 	/* trigger sounding packets */
 	ret = mt7915_mcu_set_txbf_sounding(dev);
 	if (ret)
 		return ret;
 
-	/* enable iBF & eBF */
+	/* enable eBF */
 	return mt7915_mcu_set_txbf_type(dev);
 }
 
@@ -235,12 +237,12 @@ static int mt7915_register_ext_phy(struct mt7915_dev *dev)
 	phy = mphy->priv;
 	phy->dev = dev;
 	phy->mt76 = mphy;
-	phy->chainmask = dev->chainmask & ~dev->phy.chainmask;
-	mphy->antenna_mask = BIT(hweight8(phy->chainmask)) - 1;
+	mphy->chainmask = dev->chainmask & ~dev->mphy.chainmask;
+	mphy->antenna_mask = BIT(hweight8(mphy->chainmask)) - 1;
 	mt7915_init_wiphy(mphy->hw);
 
 	INIT_LIST_HEAD(&phy->stats_list);
-	INIT_DELAYED_WORK(&phy->mac_work, mt7915_mac_work);
+	INIT_DELAYED_WORK(&mphy->mac_work, mt7915_mac_work);
 
 	mt7915_eeprom_parse_band_config(phy);
 	mt7915_set_stream_vht_txbf_caps(phy);
@@ -282,9 +284,50 @@ static void mt7915_init_work(struct work_struct *work)
 	mt7915_register_ext_phy(dev);
 }
 
+static void mt7915_wfsys_reset(struct mt7915_dev *dev)
+{
+	u32 val = MT_TOP_PWR_KEY | MT_TOP_PWR_SW_PWR_ON | MT_TOP_PWR_PWR_ON;
+	u32 reg = mt7915_reg_map_l1(dev, MT_TOP_MISC);
+
+#define MT_MCU_DUMMY_RANDOM	GENMASK(15, 0)
+#define MT_MCU_DUMMY_DEFAULT	GENMASK(31, 16)
+
+	mt76_wr(dev, MT_MCU_WFDMA0_DUMMY_CR, MT_MCU_DUMMY_RANDOM);
+
+	/* change to software control */
+	val |= MT_TOP_PWR_SW_RST;
+	mt76_wr(dev, MT_TOP_PWR_CTRL, val);
+
+	/* reset wfsys */
+	val &= ~MT_TOP_PWR_SW_RST;
+	mt76_wr(dev, MT_TOP_PWR_CTRL, val);
+
+	/* release wfsys then mcu re-excutes romcode */
+	val |= MT_TOP_PWR_SW_RST;
+	mt76_wr(dev, MT_TOP_PWR_CTRL, val);
+
+	/* switch to hw control */
+	val &= ~MT_TOP_PWR_SW_RST;
+	val |= MT_TOP_PWR_HW_CTRL;
+	mt76_wr(dev, MT_TOP_PWR_CTRL, val);
+
+	/* check whether mcu resets to default */
+	if (!mt76_poll_msec(dev, MT_MCU_WFDMA0_DUMMY_CR, MT_MCU_DUMMY_DEFAULT,
+			    MT_MCU_DUMMY_DEFAULT, 1000)) {
+		dev_err(dev->mt76.dev, "wifi subsystem reset failure\n");
+		return;
+	}
+
+	/* wfsys reset won't clear host registers */
+	mt76_clear(dev, reg, MT_TOP_MISC_FW_STATE);
+
+	msleep(100);
+}
+
 static int mt7915_init_hardware(struct mt7915_dev *dev)
 {
 	int ret, idx;
+	u32 val;
 
 	mt76_wr(dev, MT_INT_SOURCE_CSR, ~0);
 
@@ -293,6 +336,12 @@ static int mt7915_init_hardware(struct mt7915_dev *dev)
 	idr_init(&dev->token);
 
 	dev->dbdc_support = !!(mt7915_l1_rr(dev, MT_HW_BOUND) & BIT(5));
+
+	val = mt76_rr(dev, mt7915_reg_map_l1(dev, MT_TOP_MISC));
+
+	/* If MCU was already running, it is likely in a bad state */
+	if (FIELD_GET(MT_TOP_MISC_FW_STATE, val) > FW_STATE_FW_DOWNLOAD)
+		mt7915_wfsys_reset(dev);
 
 	ret = mt7915_dma_init(dev);
 	if (ret)
@@ -307,8 +356,14 @@ static int mt7915_init_hardware(struct mt7915_dev *dev)
 	mt76_wr(dev, MT_SWDEF_MODE, MT_SWDEF_NORMAL_MODE);
 
 	ret = mt7915_mcu_init(dev);
-	if (ret)
-		return ret;
+	if (ret) {
+		/* Reset and try again */
+		mt7915_wfsys_reset(dev);
+
+		ret = mt7915_mcu_init(dev);
+		if (ret)
+			return ret;
+	}
 
 	ret = mt7915_eeprom_init(dev);
 	if (ret < 0)
@@ -329,7 +384,7 @@ static int mt7915_init_hardware(struct mt7915_dev *dev)
 
 void mt7915_set_stream_vht_txbf_caps(struct mt7915_phy *phy)
 {
-	int nss = hweight8(phy->chainmask);
+	int nss = hweight8(phy->mt76->chainmask);
 	u32 *cap = &phy->mt76->sband_5g.sband.vht_cap.cap;
 
 	*cap |= IEEE80211_VHT_CAP_SU_BEAMFORMEE_CAPABLE |
@@ -440,8 +495,7 @@ static int
 mt7915_init_he_caps(struct mt7915_phy *phy, enum nl80211_band band,
 		    struct ieee80211_sband_iftype_data *data)
 {
-	int i, idx = 0;
-	int nss = hweight8(phy->chainmask);
+	int i, idx = 0, nss = hweight8(phy->mt76->chainmask);
 	u16 mcs_map = 0;
 
 	for (i = 0; i < 8; i++) {
@@ -622,7 +676,7 @@ int mt7915_register_device(struct mt7915_dev *dev)
 	dev->mt76.phy.priv = &dev->phy;
 	INIT_LIST_HEAD(&dev->phy.stats_list);
 	INIT_WORK(&dev->rc_work, mt7915_mac_sta_rc_work);
-	INIT_DELAYED_WORK(&dev->phy.mac_work, mt7915_mac_work);
+	INIT_DELAYED_WORK(&dev->mphy.mac_work, mt7915_mac_work);
 	INIT_LIST_HEAD(&dev->sta_rc_list);
 	INIT_LIST_HEAD(&dev->sta_poll_list);
 	spin_lock_init(&dev->sta_poll_lock);
@@ -648,8 +702,8 @@ int mt7915_register_device(struct mt7915_dev *dev)
 		dev->mphy.sband_5g.sband.vht_cap.cap |=
 			IEEE80211_VHT_CAP_SHORT_GI_160 |
 			IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160_80PLUS80MHZ;
-	dev->mphy.hw->wiphy->available_antennas_rx = dev->phy.chainmask;
-	dev->mphy.hw->wiphy->available_antennas_tx = dev->phy.chainmask;
+	dev->mphy.hw->wiphy->available_antennas_rx = dev->mphy.chainmask;
+	dev->mphy.hw->wiphy->available_antennas_tx = dev->mphy.chainmask;
 
 	mt76_set_stream_caps(&dev->mphy, true);
 	mt7915_set_stream_vht_txbf_caps(&dev->phy);

@@ -559,7 +559,7 @@ EXPORT_SYMBOL_GPL(svc_destroy);
 
 /*
  * Allocate an RPC server's buffer space.
- * We allocate pages and place them in rq_argpages.
+ * We allocate pages and place them in rq_pages.
  */
 static int
 svc_init_buffer(struct svc_rqst *rqstp, unsigned int size, int node)
@@ -846,7 +846,8 @@ void
 svc_rqst_free(struct svc_rqst *rqstp)
 {
 	svc_release_buffer(rqstp);
-	put_page(rqstp->rq_scratch_page);
+	if (rqstp->rq_scratch_page)
+		put_page(rqstp->rq_scratch_page);
 	kfree(rqstp->rq_resp);
 	kfree(rqstp->rq_argp);
 	kfree(rqstp->rq_auth_data);

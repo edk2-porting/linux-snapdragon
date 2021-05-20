@@ -44,6 +44,8 @@ static const struct hns3_stats hns3_txq_stats[] = {
 	HNS3_TQP_STAT("l4_proto_err", tx_l4_proto_err),
 	HNS3_TQP_STAT("l2l3l4_err", tx_l2l3l4_err),
 	HNS3_TQP_STAT("tso_err", tx_tso_err),
+	HNS3_TQP_STAT("over_max_recursion", over_max_recursion),
+	HNS3_TQP_STAT("hw_limitation", hw_limitation),
 };
 
 #define HNS3_TXQ_STATS_COUNT ARRAY_SIZE(hns3_txq_stats)
@@ -456,7 +458,7 @@ static void *hns3_update_strings(u8 *data, const struct hns3_stats *stats,
 			data[ETH_GSTRING_LEN - 1] = '\0';
 
 			/* first, prepend the prefix string */
-			n1 = scnprintf(data, MAX_PREFIX_SIZE, "%s%d_",
+			n1 = scnprintf(data, MAX_PREFIX_SIZE, "%s%u_",
 				       prefix, i);
 			size_left = (ETH_GSTRING_LEN - 1) - n1;
 
@@ -859,11 +861,9 @@ static u32 hns3_get_rss_key_size(struct net_device *netdev)
 static u32 hns3_get_rss_indir_size(struct net_device *netdev)
 {
 	struct hnae3_handle *h = hns3_get_handle(netdev);
+	struct hnae3_ae_dev *ae_dev = pci_get_drvdata(h->pdev);
 
-	if (!h->ae_algo->ops->get_rss_indir_size)
-		return 0;
-
-	return h->ae_algo->ops->get_rss_indir_size(h);
+	return ae_dev->dev_specs.rss_ind_tbl_size;
 }
 
 static int hns3_get_rss(struct net_device *netdev, u32 *indir, u8 *key,

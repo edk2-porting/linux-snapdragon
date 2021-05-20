@@ -56,7 +56,7 @@ static int hclge_gen_resp_to_vf(struct hclge_vport *vport,
 		resp_pf_to_vf->msg.resp_status = resp;
 	} else {
 		dev_warn(&hdev->pdev->dev,
-			 "failed to send response to VF, response status %d is out-of-bound\n",
+			 "failed to send response to VF, response status %u is out-of-bound\n",
 			 resp);
 		resp_pf_to_vf->msg.resp_status = EIO;
 	}
@@ -535,7 +535,7 @@ static void hclge_get_link_mode(struct hclge_vport *vport,
 	unsigned long advertising;
 	unsigned long supported;
 	unsigned long send_data;
-	u8 msg_data[10];
+	u8 msg_data[10] = {};
 	u8 dest_vfid;
 
 	advertising = hdev->hw.mac.advertising[0];
