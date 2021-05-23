@@ -6443,6 +6443,7 @@ static struct of_device_id fts_of_match_table[] = {
 	 },
 	{},
 };
+MODULE_DEVICE_TABLE(of, fts_of_match_table);
 
 #ifdef I2C_INTERFACE
 static const struct i2c_device_id fts_device_id[] = {
