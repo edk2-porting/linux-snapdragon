@@ -205,6 +205,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_TAS571X
 	imply SND_SOC_TAS5720
 	imply SND_SOC_TAS6424
+	imply SND_SOC_TAS2557
 	imply SND_SOC_TDA7419
 	imply SND_SOC_TFA9879
 	imply SND_SOC_TLV320ADCX140
@@ -1370,6 +1371,10 @@ config SND_SOC_TAS6424
 	help
 	  Enable support for Texas Instruments TAS6424 high-efficiency
 	  digital input quad-channel Class-D audio power amplifiers.
+
+config SND_SOC_TAS2557
+	tristate "Texas Instruments TAS2557 speaker amplifier"
+	depends on I2C
 
 config SND_SOC_TDA7419
 	tristate "ST TDA7419 audio processor"
