@@ -2156,5 +2156,12 @@ config MFD_INTEL_M10_BMC
 	  additional drivers must be enabled in order to use the functionality
 	  of the device.
 
+config MFD_SPK_ID
+	tristate "Speaker ID platform driver"
+	depends on ARM64 && OF
+	select MFD_CORE
+	help
+	  Audio Speaker ID platform driver
+
 endmenu
 endif
