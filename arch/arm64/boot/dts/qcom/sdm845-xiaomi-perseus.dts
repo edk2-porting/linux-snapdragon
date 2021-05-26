@@ -444,6 +444,17 @@
 	qcom,battery-capacity-ua = <3200000>;
 };
 
+&pmi8998_lpg {
+	status = "okay";
+
+	qcom,power-source = <1>;
+
+	led@5 {
+		reg = <5>;
+		label = "white";
+	};
+};
+
 &cdsp_pas {
 	status = "okay";
 	firmware-name = "qcom/cdsp.mbn";
