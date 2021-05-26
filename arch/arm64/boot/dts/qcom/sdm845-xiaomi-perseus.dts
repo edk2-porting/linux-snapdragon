@@ -435,6 +435,13 @@
 	qcom,wave-play-rate-us = <4878>;
 };
 
+&pmi8998_fg {
+	status = "okay";
+	qcom,max-voltage-uv = <4400000>;
+	qcom,min-voltage-uv = <3700000>;
+	qcom,battery-capacity-ua = <3200000>;
+};
+
 &cdsp_pas {
 	status = "okay";
 	firmware-name = "qcom/cdsp.mbn";
