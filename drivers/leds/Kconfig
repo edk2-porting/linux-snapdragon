@@ -928,11 +928,14 @@ config LEDS_ACER_A500
 	  This option enables support for the Power Button LED of
 	  Acer Iconia Tab A500.
 
+config LEDS_QCOM_LPG
+	tristate "Qualcomm LPG LED driver"
+	depends on LEDS_CLASS_MULTICOLOR && PWM && OF
+	help
+	   This option enables support for the Qualcomm LPG LED driver
+
 comment "Flash and Torch LED drivers"
 source "drivers/leds/flash/Kconfig"
-
-comment "RGB LED drivers"
-source "drivers/leds/rgb/Kconfig"
 
 comment "LED Triggers"
 source "drivers/leds/trigger/Kconfig"
