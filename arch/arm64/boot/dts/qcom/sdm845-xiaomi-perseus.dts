@@ -533,7 +533,7 @@
 		#sound-dai-cells = <1>;
 		compatible = "ti,tas2557";
 		reg = <0x4c>;
-		ti,cdc-reset-gpio = <&tlmm 76 0>;
+		ti,cdc-reset-gpio = <&tlmm 69 0>;
 		ti,irq-gpio = <&tlmm 30 0>;
 		ti,i2s-bits = <16>;
 		ti,bypass-tmax = <0>;
@@ -677,6 +677,21 @@
 		link-name = "MultiMedia3";
 		cpu {
 			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA3>;
+		};
+	};
+
+	tas2557-dai-link {
+		link-name = "Primary Spkr Playback";
+		cpu {
+			sound-dai = <&q6afedai QUATERNARY_MI2S_RX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&tas2557_codec 0>;
 		};
 	};
 
