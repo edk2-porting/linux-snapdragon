@@ -25,6 +25,8 @@
 	aliases {
 		serial0 = &uart9;
 		hsuart0 = &uart6;
+		bluetooth0 = &bluetooth;
+		wifi0 = &wifi;
 	};
 
 	chosen {
@@ -32,12 +34,7 @@
 		#size-cells = <2>;
 		ranges;
 
-		// For simplefb hack
 		stdout-path = "display0";
-
-		/* hack: use framebuffer setup by bootloader.
-		 * the address is taken from the bootloader config (strings xbl.img | grep "Display Reserved")
-		 */
 		framebuffer0: framebuffer@9d400000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0x9D400000 0 0x02400000>;
@@ -59,7 +56,6 @@
 	vbat: vbat-regulator {
 		compatible = "regulator-fixed";
 		regulator-name = "VBAT";
-
 		vin-supply = <&vph_pwr>;
 		regulator-min-microvolt = <4200000>;
 		regulator-max-microvolt = <4200000>;
@@ -69,7 +65,6 @@
 	vbat_som: vbat-som-regulator {
 		compatible = "regulator-fixed";
 		regulator-name = "VBAT_SOM";
-
 		vin-supply = <&vph_pwr>;
 		regulator-min-microvolt = <4200000>;
 		regulator-max-microvolt = <4200000>;
@@ -88,7 +83,6 @@
 	vdc_5v: vdc-5v-regulator {
 		compatible = "regulator-fixed";
 		regulator-name = "VDC_5V";
-
 		vin-supply = <&vph_pwr>;
 		regulator-min-microvolt = <500000>;
 		regulator-max-microvolt = <500000>;
@@ -102,11 +96,11 @@
 	vreg_s4a_1p8: pm8998-smps4 {
 		compatible = "regulator-fixed";
 		regulator-name = "vreg_s4a_1p8";
+		vin-supply = <&vph_pwr>;
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <1800000>;
 		regulator-always-on;
 		regulator-boot-on;
-		vin-supply = <&vph_pwr>;
 	};
 
 	disp_vci_vreg: disp_vci_vreg {
@@ -114,8 +108,8 @@
 		regulator-name = "disp_vci_vreg";
 		start-delay-us = <4000>;
 		regulator-always-on;
-		enable-active-high;
 		regulator-boot-on;
+		enable-active-high;
 		gpio = <&tlmm 99 0>;
 	};
 
@@ -124,8 +118,8 @@
 		regulator-name = "disp_vddio_vreg";
 		startup-delay-us = <4000>;
 		regulator-always-on;
-		enable-active-high;
 		regulator-boot-on;
+		enable-active-high;
 		gpio = <&tlmm 79 0>;
 	};
 
@@ -133,9 +127,9 @@
 		compatible = "regulator-fixed";
 		regulator-name = "fp_vdd_vreg";
 		startup-delay-us = <4000>;
+		regulator-always-on;
 		enable-active-high;
 		gpio = <&tlmm 50 0>;
-		regulator-always-on;
 	};
 
 	gpio_keys {
@@ -149,12 +143,14 @@
 			label = "Volume Up";
 			linux,code = <KEY_VOLUMEUP>;
 			gpios = <&pm8998_gpio 6 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
 		};
 
 		ai_key {
 			label = "AI Key";
 			linux,code = <KEY_ASSISTANT>;
 			gpios = <&tlmm 44 GPIO_ACTIVE_LOW>;
+			debounce-interval = <39>;
 		};
 	};
 };
@@ -293,8 +289,6 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
-
-		// dsi and touchscreen maybe
 		vreg_l14a_1p8: ldo14 {
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1800000>;
@@ -403,9 +397,7 @@
 	pmi8998-rpmh-regulators {
 		compatible = "qcom,pmi8998-rpmh-regulators";
 		qcom,pmic-id = "b";
-
 		vdd-bob-supply = <&vph_pwr>;
-
 		vreg_bob: bob {
 			regulator-min-microvolt = <3312000>;
 			regulator-max-microvolt = <3600000>;
@@ -417,23 +409,24 @@
 	pm8005-rpmh-regulators {
 		compatible = "qcom,pm8005-rpmh-regulators";
 		qcom,pmic-id = "c";
-
+		vdd-s1-supply = <&vph_pwr>;
+		vdd-s2-supply = <&vph_pwr>;
+		vdd-s3-supply = <&vph_pwr>;
+		vdd-s4-supply = <&vph_pwr>;
 		vreg_smp3c_0p6: smps3 {
-			regulator-always-on;
 			regulator-min-microvolt = <600000>;
 			regulator-max-microvolt = <600000>;
+			regulator-always-on;
 		};
 	};
 };
 
 &apps_smmu {
-	/* Enable this when upstream smmu driver gets patched */
 	status = "okay";
 };
 
 &pmi8998_haptics {
 	status = "okay";
-	// This is the LRA resonant frequency and is device specific
 	qcom,wave-play-rate-us = <4878>;
 };
 
@@ -446,9 +439,7 @@
 
 &pmi8998_lpg {
 	status = "okay";
-
 	qcom,power-source = <1>;
-
 	led@5 {
 		reg = <5>;
 		label = "white";
@@ -469,18 +460,13 @@
 
 	panel@0 {
 		compatible = "samsung,fhd-ea8076";
-		status = "okay";
-
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <0>;
 		vddi0-supply = <&vreg_l14a_1p8>;
-
 		reset-gpios = <&tlmm 6 GPIO_ACTIVE_LOW>;
-
 		pinctrl-names = "default";
 		pinctrl-0 = <&sde_dsi_active &sde_te_active>;
-
 		port {
 			panel_in: endpoint {
 				remote-endpoint = <&dsi0_out>;
@@ -516,14 +502,6 @@
 };
 
 &gpu {
-	/*
-	 * note: the amd,imageon compatible makes it possible
-	 * to use the drm/msm driver without the display node,
-	 * make sure to remove it when display node is added
-	 */
-	compatible = "qcom,adreno-630.2",
-				 "qcom,adreno",
-				 "amd,imageon";
 	zap-shader {
 		memory-region = <&gpu_mem>;
 		firmware-name = "qcom/a630_zap.mbn";
@@ -544,12 +522,13 @@
 
 /* Audio Amplifier tas2557 */
 &i2c5 {
+	#dma-cells = <3>;
 	status = "okay";
 	clock-frequency = <400000>;
-
 	dmas = <&gpi_dma0 0 5 QCOM_GPI_I2C>,
 	       <&gpi_dma0 1 5 QCOM_GPI_I2C>;
 	dma-names = "tx", "rx";
+
 	tas2557_codec: tas2557@4c{
 		#sound-dai-cells = <1>;
 		compatible = "ti,tas2557";
@@ -571,8 +550,8 @@
 &i2c14 {
 	status = "okay";
 	clock-frequency = <400000>;
-	dmas =  <&gpi_dma1 0 6 QCOM_GPI_I2C>,
-		<&gpi_dma1 1 6 QCOM_GPI_I2C>;
+	dmas = <&gpi_dma1 0 6 QCOM_GPI_I2C>,
+	       <&gpi_dma1 1 6 QCOM_GPI_I2C>;
 	dma-names = "tx", "rx";
 
 	fts@49 {
@@ -712,7 +691,7 @@
 		};
 
 		codec {
-			sound-dai =  <&wcd9340 0>;
+			sound-dai = <&wcd9340 0>;
 		};
 	};
 
@@ -731,7 +710,6 @@
 		};
 	};
 };
-
 
 &tlmm {
 	gpio-reserved-ranges = <0 4>, <81 4>;
@@ -883,7 +861,7 @@
 &uart6 {
 	status = "okay";
 
-	bluetooth {
+	bluetooth: bluetooth {
 		compatible = "qcom,wcn3990-bt";
 		vddio-supply = <&vreg_s4a_1p8>;
 		vddxo-supply = <&vreg_l7a_1p8>;
@@ -968,12 +946,9 @@
 	vdd-1.8-xo-supply = <&vreg_l7a_1p8>;
 	vdd-1.3-rfa-supply = <&vreg_l17a_1p3>;
 	vdd-3.3-ch0-supply = <&vreg_l25a_3p3>;
-
-	qcom,snoc-host-cap-skip-quirk;
 };
 
 /* PINCTRL - additions to nodes defined in sdm845.dtsi */
-
 &qup_uart6_default {
 	pinmux {
 		 pins = "gpio45", "gpio46", "gpio47", "gpio48";
