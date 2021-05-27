@@ -19,8 +19,6 @@
 ** =============================================================================
 */
 
-#ifdef CONFIG_TAS2557_MISC
-
 #define DEBUG
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -533,4 +531,3 @@ int tas2557_deregister_misc(struct tas2557_priv *pTAS2557)
 MODULE_AUTHOR("Texas Instruments Inc.");
 MODULE_DESCRIPTION("TAS2557 Misc Smart Amplifier driver");
 MODULE_LICENSE("GPL v2");
-#endif

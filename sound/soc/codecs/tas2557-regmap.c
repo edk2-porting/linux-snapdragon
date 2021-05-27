@@ -19,8 +19,6 @@
 ** =============================================================================
 */
 
-#ifdef CONFIG_TAS2557_REGMAP
-
 #define DEBUG
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -43,13 +41,8 @@
 #include "tas2557-core.h"
 #include <linux/interrupt.h>
 #include <linux/irq.h>
-#ifdef CONFIG_TAS2557_CODEC
 #include "tas2557-codec.h"
-#endif
-
-#ifdef CONFIG_TAS2557_MISC
 #include "tas2557-misc.h"
-#endif
 
 #define ENABLE_TILOAD
 #ifdef ENABLE_TILOAD
@@ -382,13 +375,8 @@ static void irq_work_routine(struct work_struct *work)
 	struct tas2557_priv *pTAS2557 =
 		container_of(work, struct tas2557_priv, irq_work.work);
 
-#ifdef CONFIG_TAS2557_CODEC
 	mutex_lock(&pTAS2557->codec_lock);
-#endif
-
-#ifdef CONFIG_TAS2557_MISC
 	mutex_lock(&pTAS2557->file_lock);
-#endif
 
 	if (pTAS2557->mnErrCode & ERROR_FAILSAFE)
 		goto program;
@@ -508,13 +496,8 @@ program:
 
 end:
 
-#ifdef CONFIG_TAS2557_MISC
 	mutex_unlock(&pTAS2557->file_lock);
-#endif
-
-#ifdef CONFIG_TAS2557_CODEC
 	mutex_unlock(&pTAS2557->codec_lock);
-#endif
 }
 
 static irqreturn_t tas2557_irq_handler(int irq, void *dev_id)
@@ -545,13 +528,8 @@ static void timer_work_routine(struct work_struct *work)
 	struct TProgram *pProgram;
 	static int nAvg;
 
-#ifdef CONFIG_TAS2557_CODEC
 	mutex_lock(&pTAS2557->codec_lock);
-#endif
-
-#ifdef CONFIG_TAS2557_MISC
 	mutex_lock(&pTAS2557->file_lock);
-#endif
 
 	if (pTAS2557->mbRuntimeSuspend) {
 		dev_info(pTAS2557->dev, "%s, Runtime Suspended\n", __func__);
@@ -611,13 +589,8 @@ static void timer_work_routine(struct work_struct *work)
 
 end:
 
-#ifdef CONFIG_TAS2557_MISC
 	mutex_unlock(&pTAS2557->file_lock);
-#endif
-
-#ifdef CONFIG_TAS2557_CODEC
 	mutex_unlock(&pTAS2557->codec_lock);
-#endif
 }
 
 static int tas2557_runtime_suspend(struct tas2557_priv *pTAS2557)
@@ -703,7 +676,6 @@ static int tas2557_i2c_probe(struct i2c_client *pClient,
 	int nResult = 0;
 	unsigned int nValue = 0;
 	const char *pFWName;
-
 	dev_info(&pClient->dev, "%s enter\n", __func__);
 
 	pTAS2557 = devm_kzalloc(&pClient->dev, sizeof(struct tas2557_priv), GFP_KERNEL);
@@ -831,15 +803,11 @@ static int tas2557_i2c_probe(struct i2c_client *pClient,
 		goto err;
 	}
 
-#ifdef CONFIG_TAS2557_CODEC
 	mutex_init(&pTAS2557->codec_lock);
 	tas2557_register_codec(pTAS2557);
-#endif
 
-#ifdef CONFIG_TAS2557_MISC
 	mutex_init(&pTAS2557->file_lock);
 	tas2557_register_misc(pTAS2557);
-#endif
 
 #ifdef ENABLE_TILOAD
 	tiload_driver_init(pTAS2557);
@@ -863,15 +831,11 @@ static int tas2557_i2c_remove(struct i2c_client *pClient)
 
 	dev_info(pTAS2557->dev, "%s\n", __func__);
 
-#ifdef CONFIG_TAS2557_CODEC
 	tas2557_deregister_codec(pTAS2557);
 	mutex_destroy(&pTAS2557->codec_lock);
-#endif
 
-#ifdef CONFIG_TAS2557_MISC
 	tas2557_deregister_misc(pTAS2557);
 	mutex_destroy(&pTAS2557->file_lock);
-#endif
 
 	mutex_destroy(&pTAS2557->dev_lock);
 	return 0;
@@ -911,5 +875,3 @@ module_i2c_driver(tas2557_i2c_driver);
 MODULE_AUTHOR("Texas Instruments Inc.");
 MODULE_DESCRIPTION("TAS2557 I2C Smart Amplifier driver");
 MODULE_LICENSE("GPL v2");
-
-#endif

@@ -1776,13 +1776,8 @@ void tas2557_fw_ready(const struct firmware *pFW, void *pContext)
 	unsigned int nProgram = 0;
 	unsigned int nSampleRate = 0;
 
-#ifdef CONFIG_TAS2557_CODEC
 	mutex_lock(&pTAS2557->codec_lock);
-#endif
-
-#ifdef CONFIG_TAS2557_MISC
 	mutex_lock(&pTAS2557->file_lock);
-#endif
 
 	dev_info(pTAS2557->dev, "%s:\n", __func__);
 
@@ -1828,14 +1823,8 @@ void tas2557_fw_ready(const struct firmware *pFW, void *pContext)
 
 end:
 
-#ifdef CONFIG_TAS2557_CODEC
 	mutex_unlock(&pTAS2557->codec_lock);
-#endif
-
-#ifdef CONFIG_TAS2557_MISC
 	mutex_unlock(&pTAS2557->file_lock);
-#endif
-	(void)0;
 }
 
 int tas2557_set_program(struct tas2557_priv *pTAS2557,

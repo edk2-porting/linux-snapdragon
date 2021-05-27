@@ -477,15 +477,11 @@ struct tas2557_priv {
 	*/
 	bool mbBypassTMax;
 
-#ifdef CONFIG_TAS2557_CODEC
 	struct mutex codec_lock;
-#endif
 
-#ifdef CONFIG_TAS2557_MISC
 	int mnDBGCmd;
 	int mnCurrentReg;
 	struct mutex file_lock;
-#endif
 	int mnSpkType;
 	struct device_node *spk_id_gpio_p;
 
