@@ -294,7 +294,6 @@ int fts_write(u8 *cmd, int cmdLength)
 	return OK;
 }
 
-#ifdef CONFIG_I2C_BY_DMA
 /**
  * same as above but can be used when enable DMA.
  */
@@ -432,21 +431,6 @@ int fts_write_dma_safe(u8 *cmd, int cmdLength)
 
 	return ret;
 }
-#else
-int fts_read_dma_safe(u8 *outBuf, int byteToRead)
-{
-	return fts_read(outBuf, byteToRead);
-}
-int fts_writeRead_dma_safe(u8 *cmd, int cmdLength, u8 *outBuf, int byteToRead)
-{
-	return fts_writeRead(cmd, cmdLength, outBuf, byteToRead);
-}
-int fts_write_dma_safe(u8 *cmd, int cmdLength)
-{
-	return fts_write(cmd, cmdLength);
-}
-#endif
-
 
 /**
 * Write a FW command to the IC and check automatically the echo event

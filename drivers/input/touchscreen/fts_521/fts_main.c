@@ -44,11 +44,9 @@
 #include <linux/i2c-dev.h>
 #include <linux/spi/spi.h>
 #include <linux/completion.h>
-#ifdef CONFIG_SECURE_TOUCH
 #include <linux/atomic.h>
 #include <linux/sysfs.h>
 #include <linux/hardirq.h>
-#endif
 
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
@@ -2902,7 +2900,6 @@ static int fts_palm_sensor_write(int value)
 #endif
 #endif
 
-#ifdef CONFIG_SECURE_TOUCH
 static void fts_secure_touch_notify (struct fts_ts_info *info)
 {
 	/*might sleep*/
@@ -3106,8 +3103,6 @@ static ssize_t fts_secure_touch_show (struct device *dev, struct device_attribut
 	}
 	return scnprintf(buf, PAGE_SIZE, "%d", value);
 }
-#endif
-
 
 static DEVICE_ATTR(fts_lockdown, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   fts_lockdown_show, fts_lockdown_store);
@@ -3230,10 +3225,8 @@ static DEVICE_ATTR(fod_status, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   fts_fod_status_show, fts_fod_status_store);
 
 
-#ifdef CONFIG_SECURE_TOUCH
 DEVICE_ATTR(secure_touch_enable, (S_IRUGO | S_IWUSR | S_IWGRP), fts_secure_touch_enable_show,  fts_secure_touch_enable_store);
 DEVICE_ATTR(secure_touch, (S_IRUGO | S_IWUSR | S_IWGRP), fts_secure_touch_show,  NULL);
-#endif
 /**@}*/
 /**@}*/
 
@@ -4048,11 +4041,9 @@ static irqreturn_t fts_event_handler(int irq, void *ts_info)
 	unsigned char *evt_data;
 	event_dispatch_handler_t event_handler;
 
-#ifdef CONFIG_SECURE_TOUCH
 	if (!fts_secure_filter_interrupt(info)) {
 		return IRQ_HANDLED;
 	}
-#endif
 
 	if (info->dev_pm_suspend) {
 		error = wait_for_completion_timeout(&info->dev_pm_suspend_completion, msecs_to_jiffies(700));
@@ -4773,9 +4764,7 @@ static void fts_resume_work(struct work_struct *work)
 #endif
 	info = container_of(work, struct fts_ts_info, resume_work);
 
-#ifdef CONFIG_SECURE_TOUCH
 	fts_secure_stop(info, true);
-#endif
 
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_SENSOR
 	res = fts_finger_report_disable(info, false);
@@ -4827,9 +4816,7 @@ static void fts_suspend_work(struct work_struct *work)
 #endif
 	info = container_of(work, struct fts_ts_info, suspend_work);
 
-#ifdef CONFIG_SECURE_TOUCH
 	fts_secure_stop(info, true);
-#endif
 
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE_SENSOR
 	if (fts_info->p_sensor_switch) {
@@ -5852,7 +5839,6 @@ static const struct file_operations tpdbg_operations = {
 };
 #endif
 
-#ifdef CONFIG_SECURE_TOUCH
 int fts_secure_init(struct fts_ts_info *info)
 {
 	int ret;
@@ -5905,9 +5891,6 @@ void fts_secure_remove(struct fts_ts_info *info)
 	sysfs_remove_file(&info->dev->kobj, &dev_attr_secure_touch.attr);
 	kfree(scr_info);
 }
-
-#endif
-
 
 /**
  * Probe function, called when the driver it is matched with a device with the same name compatible name
@@ -6174,7 +6157,6 @@ static int fts_probe(struct spi_device *client)
 		goto ProbeErrorExit_6;
 	}
 
-#ifdef CONFIG_SECURE_TOUCH
 	logError(1, "%s %s create secure touch file...\n", tag, __func__);
 	error = fts_secure_init(info);
 	if (error < 0) {
@@ -6183,9 +6165,7 @@ static int fts_probe(struct spi_device *client)
 	}
 	logError(1, "%s %s create secure touch file successful\n", tag, __func__);
 	fts_secure_stop(info, 1);
-#endif
 
-#ifdef CONFIG_I2C_BY_DMA
 	/*dma buf init*/
 	info->dma_buf = (struct fts_dma_buf *)kzalloc(sizeof(*info->dma_buf), GFP_KERNEL);
 	if (!info->dma_buf) {
@@ -6203,7 +6183,6 @@ static int fts_probe(struct spi_device *client)
 		logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
 		goto ProbeErrorExit_7;
 	}
-#endif
 	fts_info = info;
 	error = fts_get_lockdown_info(info->lockdown_info, info);
 
@@ -6352,17 +6331,13 @@ ProbeErrorExit_8:
     info->fts_tp_class = NULL;
 
 ProbeErrorExit_7:
-#ifdef CONFIG_SECURE_TOUCH
 		fts_secure_remove(info);
-#endif
-#ifdef CONFIG_I2C_BY_DMA
 	if (info->dma_buf)
 		kfree(info->dma_buf);
 	if (info->dma_buf->rdBuf)
 		kfree(info->dma_buf->rdBuf);
 	if (info->dma_buf->wrBuf)
 		kfree(info->dma_buf->wrBuf);
-#endif
 
 ProbeErrorExit_6:
 	input_unregister_device(info->input_dev);
@@ -6425,9 +6400,7 @@ static int fts_remove(struct spi_device *client)
 	fts_enable_reg(info, false);
 	fts_get_reg(info, false);
 	fts_info = NULL;
-#ifdef CONFIG_SECURE_TOUCH
 	fts_secure_remove(info);
-#endif
 	/* free all */
 	kfree(info);
 

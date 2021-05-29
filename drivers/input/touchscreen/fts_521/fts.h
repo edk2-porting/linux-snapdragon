@@ -223,7 +223,6 @@ extern char tag[8];
 typedef void (*event_dispatch_handler_t)
  (struct fts_ts_info *info, unsigned char *data);
 
-#ifdef CONFIG_SECURE_TOUCH
 /*
 struct fts_secure_delay {
 	bool palm_pending;
@@ -242,15 +241,12 @@ struct fts_secure_info {
 //	struct mutex palm_lock;
 	void *fts_info;
 };
-#endif
 
-#ifdef CONFIG_I2C_BY_DMA
 struct fts_dma_buf {
 	struct mutex dmaBufLock;
 	u8 *rdBuf;
 	u8 *wrBuf;
 };
-#endif
 
 /**
  * FTS capacitive touch screen device information
@@ -348,12 +344,8 @@ struct fts_ts_info {
 	struct device *fts_touch_dev;
 	char *current_clicknum_file;
 #endif
-#ifdef CONFIG_SECURE_TOUCH
 	struct fts_secure_info *secure_info;
-#endif
-#ifdef CONFIG_I2C_BY_DMA
 	struct fts_dma_buf *dma_buf;
-#endif
 	bool lockdown_is_ok;
 	struct completion tp_reset_completion;
 	atomic_t system_is_resetting;
