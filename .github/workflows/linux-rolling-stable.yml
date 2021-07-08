@@ -1,0 +1,40 @@
+name: CI
+on:
+  push:
+    branches: [linux-rolling-stable]
+  pull_request:
+    branches: [linux-rolling-stable]
+jobs:
+  build:
+    name: Kernel Build
+    runs-on: ubuntu-latest
+    env:
+      ARCH: arm64
+      CROSS_COMPILE: aarch64-linux-gnu-
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Install requires packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc git flex bison bc make kmod libssl-dev tar gzip
+      - name: Build kernel
+        run: |
+          make perseus_defconfig
+          make -j $(nproc)
+      - name: Archive artifact
+        run: |
+          set -x
+          mkdir linux-snapdragon
+          mkdir linux-snapdragon/dtb
+          make -j $(nproc) INSTALL_MOD_PATH=$PWD/out/ modules_install
+          mv out/lib/modules linux-snapdragon/
+          cp arch/$ARCH/boot/Image linux-snapdragon/
+          cp arch/$ARCH/boot/dts/qcom/*.dtb linux-snapdragon/dtb/
+          rm -f linux-snapdragon/modules/*/{source,build}
+          tar --gzip --create --file=linux-snapdragon.tar.gz linux-snapdragon
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: linux-snapdragon
+          path: linux-snapdragon.tar.gz
