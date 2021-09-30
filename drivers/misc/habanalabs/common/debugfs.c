@@ -349,7 +349,7 @@ static int mmu_show(struct seq_file *s, void *data)
 		return 0;
 	}
 
-	phys_addr = hops_info.hop_info[hops_info.used_hops - 1].hop_pte_val;
+	hl_mmu_va_to_pa(ctx, virt_addr, &phys_addr);
 
 	if (hops_info.scrambled_vaddr &&
 		(dev_entry->mmu_addr != hops_info.scrambled_vaddr))
@@ -1277,6 +1277,11 @@ void hl_debugfs_add_device(struct hl_device *hdev)
 				0400,
 				dev_entry->root,
 				&dev_entry->blob_desc);
+
+	debugfs_create_x8("skip_reset_on_timeout",
+				0644,
+				dev_entry->root,
+				&hdev->skip_reset_on_timeout);
 
 	for (i = 0, entry = dev_entry->entry_arr ; i < count ; i++, entry++) {
 		debugfs_create_file(hl_debugfs_list[i].name,

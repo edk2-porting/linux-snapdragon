@@ -616,7 +616,7 @@ enum romcode_read prcmu_get_rc_p2a(void)
 }
 
 /**
- * prcmu_get_current_mode - Return the current XP70 power mode
+ * prcmu_get_xp70_current_state - Return the current XP70 power mode
  * Returns: Returns the current AP(ARM) power mode: init,
  * apBoot, apExecute, apDeepSleep, apSleep, apIdle, apReset
  */
@@ -898,7 +898,7 @@ unlock_and_return:
 }
 
 /**
- * db8500_set_ape_opp - set the appropriate APE OPP
+ * db8500_prcmu_set_ape_opp - set the appropriate APE OPP
  * @opp: The new APE operating point to which transition is to be made
  * Returns: 0 on success, non-zero on failure
  *
@@ -1622,21 +1622,19 @@ static long round_clock_rate(u8 clock, unsigned long rate)
 }
 
 static const unsigned long db8500_armss_freqs[] = {
-	200000000,
-	400000000,
-	800000000,
+	199680000,
+	399360000,
+	798720000,
 	998400000
 };
 
 /* The DB8520 has slightly higher ARMSS max frequency */
 static const unsigned long db8520_armss_freqs[] = {
-	200000000,
-	400000000,
-	800000000,
+	199680000,
+	399360000,
+	798720000,
 	1152000000
 };
-
-
 
 static long round_armss_rate(unsigned long rate)
 {
@@ -2297,7 +2295,7 @@ u16 db8500_prcmu_get_reset_code(void)
 }
 
 /**
- * db8500_prcmu_reset_modem - ask the PRCMU to reset modem
+ * db8500_prcmu_modem_reset - ask the PRCMU to reset modem
  */
 void db8500_prcmu_modem_reset(void)
 {

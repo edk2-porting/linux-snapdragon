@@ -1189,7 +1189,7 @@ static inline int resize_screen(struct vc_data *vc, int width, int height,
  *	information and perform any necessary signal handling.
  *
  *	Caller must hold the console semaphore. Takes the termios rwsem and
- *	ctrl_lock of the tty IFF a tty is passed.
+ *	ctrl.lock of the tty IFF a tty is passed.
  */
 
 static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
@@ -1355,7 +1355,7 @@ int vc_resize(struct vc_data *vc, unsigned int cols, unsigned int rows)
  *	the actual work.
  *
  *	Takes the console sem and the called methods then take the tty
- *	termios_rwsem and the tty ctrl_lock in that order.
+ *	termios_rwsem and the tty ctrl.lock in that order.
  */
 static int vt_resize(struct tty_struct *tty, struct winsize *ws)
 {
@@ -2059,7 +2059,7 @@ static void restore_cur(struct vc_data *vc)
 
 enum { ESnormal, ESesc, ESsquare, ESgetpars, ESfunckey,
 	EShash, ESsetG0, ESsetG1, ESpercent, EScsiignore, ESnonstd,
-	ESpalette, ESosc };
+	ESpalette, ESosc, ESapc, ESpm, ESdcs };
 
 /* console_lock is held (except via vc_init()) */
 static void reset_terminal(struct vc_data *vc, int do_clear)
@@ -2133,20 +2133,28 @@ static void vc_setGx(struct vc_data *vc, unsigned int which, int c)
 		vc->vc_translate = set_translate(*charset, vc);
 }
 
+/* is this state an ANSI control string? */
+static bool ansi_control_string(unsigned int state)
+{
+	if (state == ESosc || state == ESapc || state == ESpm || state == ESdcs)
+		return true;
+	return false;
+}
+
 /* console_lock is held */
 static void do_con_trol(struct tty_struct *tty, struct vc_data *vc, int c)
 {
 	/*
 	 *  Control characters can be used in the _middle_
-	 *  of an escape sequence.
+	 *  of an escape sequence, aside from ANSI control strings.
 	 */
-	if (vc->vc_state == ESosc && c>=8 && c<=13) /* ... except for OSC */
+	if (ansi_control_string(vc->vc_state) && c >= 8 && c <= 13)
 		return;
 	switch (c) {
 	case 0:
 		return;
 	case 7:
-		if (vc->vc_state == ESosc)
+		if (ansi_control_string(vc->vc_state))
 			vc->vc_state = ESnormal;
 		else if (vc->vc_bell_duration)
 			kd_mksound(vc->vc_bell_pitch, vc->vc_bell_duration);
@@ -2207,6 +2215,12 @@ static void do_con_trol(struct tty_struct *tty, struct vc_data *vc, int c)
 		case ']':
 			vc->vc_state = ESnonstd;
 			return;
+		case '_':
+			vc->vc_state = ESapc;
+			return;
+		case '^':
+			vc->vc_state = ESpm;
+			return;
 		case '%':
 			vc->vc_state = ESpercent;
 			return;
@@ -2223,6 +2237,9 @@ static void do_con_trol(struct tty_struct *tty, struct vc_data *vc, int c)
 		case 'H':
 			if (vc->state.x < VC_TABSTOPS_COUNT)
 				set_bit(vc->state.x, vc->vc_tab_stop);
+			return;
+		case 'P':
+			vc->vc_state = ESdcs;
 			return;
 		case 'Z':
 			respond_ID(tty);
@@ -2520,7 +2537,13 @@ static void do_con_trol(struct tty_struct *tty, struct vc_data *vc, int c)
 		vc_setGx(vc, 1, c);
 		vc->vc_state = ESnormal;
 		return;
+	case ESapc:
+		return;
 	case ESosc:
+		return;
+	case ESpm:
+		return;
+	case ESdcs:
 		return;
 	default:
 		vc->vc_state = ESnormal;
@@ -2888,7 +2911,7 @@ static int do_con_write(struct tty_struct *tty, const unsigned char *buf, int co
 
 	param.vc = vc;
 
-	while (!tty->stopped && count) {
+	while (!tty->flow.stopped && count) {
 		int orig = *buf;
 		buf++;
 		n++;
@@ -3260,21 +3283,14 @@ static int con_write(struct tty_struct *tty, const unsigned char *buf, int count
 
 static int con_put_char(struct tty_struct *tty, unsigned char ch)
 {
-	if (in_interrupt())
-		return 0;	/* n_r3964 calls put_char() from interrupt context */
 	return do_con_write(tty, &ch, 1);
 }
 
-static int con_write_room(struct tty_struct *tty)
+static unsigned int con_write_room(struct tty_struct *tty)
 {
-	if (tty->stopped)
+	if (tty->flow.stopped)
 		return 0;
 	return 32768;		/* No limit, really; we're not buffering */
-}
-
-static int con_chars_in_buffer(struct tty_struct *tty)
-{
-	return 0;		/* we're not buffering */
 }
 
 /*
@@ -3523,7 +3539,6 @@ static const struct tty_operations con_ops = {
 	.write_room = con_write_room,
 	.put_char = con_put_char,
 	.flush_chars = con_flush_chars,
-	.chars_in_buffer = con_chars_in_buffer,
 	.ioctl = vt_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = vt_compat_ioctl,

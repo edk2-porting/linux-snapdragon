@@ -8,6 +8,7 @@
  * Copyright 2018 Nick Piggin, Michael Ellerman, IBM Corp.
  */
 
+#include <linux/delay.h>
 #include <linux/export.h>
 #include <linux/kallsyms.h>
 #include <linux/module.h>
@@ -23,8 +24,8 @@
 
 #include <asm/paca.h>
 
-void arch_stack_walk(stack_trace_consume_fn consume_entry, void *cookie,
-		     struct task_struct *task, struct pt_regs *regs)
+void __no_sanitize_address arch_stack_walk(stack_trace_consume_fn consume_entry, void *cookie,
+					   struct task_struct *task, struct pt_regs *regs)
 {
 	unsigned long sp;
 
@@ -61,8 +62,8 @@ void arch_stack_walk(stack_trace_consume_fn consume_entry, void *cookie,
  *
  * If the task is not 'current', the caller *must* ensure the task is inactive.
  */
-int arch_stack_walk_reliable(stack_trace_consume_fn consume_entry,
-			     void *cookie, struct task_struct *task)
+int __no_sanitize_address arch_stack_walk_reliable(stack_trace_consume_fn consume_entry,
+						   void *cookie, struct task_struct *task)
 {
 	unsigned long sp;
 	unsigned long newsp;

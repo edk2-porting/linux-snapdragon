@@ -152,7 +152,7 @@ static int do_test(struct bpf_object *obj, int (*func)(void),
 	}
 
 	evlist__splice_list_tail(evlist, &parse_state.list);
-	evlist->nr_groups = parse_state.nr_groups;
+	evlist->core.nr_groups = parse_state.nr_groups;
 
 	evlist__config(evlist, &opts, NULL);
 
@@ -192,7 +192,7 @@ static int do_test(struct bpf_object *obj, int (*func)(void),
 	}
 
 	if (count != expect * evlist->core.nr_entries) {
-		pr_debug("BPF filter result incorrect, expected %d, got %d samples\n", expect, count);
+		pr_debug("BPF filter result incorrect, expected %d, got %d samples\n", expect * evlist->core.nr_entries, count);
 		goto out_delete_evlist;
 	}
 

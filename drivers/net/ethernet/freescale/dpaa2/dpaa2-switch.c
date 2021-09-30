@@ -1625,7 +1625,7 @@ static int dpaa2_switch_port_bridge_flags(struct net_device *netdev,
 	return 0;
 }
 
-static int dpaa2_switch_port_attr_set(struct net_device *netdev,
+static int dpaa2_switch_port_attr_set(struct net_device *netdev, const void *ctx,
 				      const struct switchdev_attr *attr,
 				      struct netlink_ext_ack *extack)
 {
@@ -3230,12 +3230,6 @@ static int dpaa2_switch_probe(struct fsl_mc_device *sw_dev)
 		netif_napi_add(ethsw->ports[0]->netdev,
 			       &ethsw->fq[i].napi, dpaa2_switch_poll,
 			       NAPI_POLL_WEIGHT);
-
-	err = dpsw_enable(ethsw->mc_io, 0, ethsw->dpsw_handle);
-	if (err) {
-		dev_err(ethsw->dev, "dpsw_enable err %d\n", err);
-		goto err_free_netdev;
-	}
 
 	/* Setup IRQs */
 	err = dpaa2_switch_setup_irqs(sw_dev);

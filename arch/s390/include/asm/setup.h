@@ -36,6 +36,7 @@
 #define MACHINE_FLAG_NX		BIT(15)
 #define MACHINE_FLAG_GS		BIT(16)
 #define MACHINE_FLAG_SCC	BIT(17)
+#define MACHINE_FLAG_PCI_MIO	BIT(18)
 
 #define LPP_MAGIC		BIT(31)
 #define LPP_PID_MASK		_AC(0xffffffff, UL)
@@ -78,6 +79,8 @@ struct parmarea {
 	char command_line[ARCH_COMMAND_LINE_SIZE];	/* 0x10480 */
 };
 
+extern struct parmarea parmarea;
+
 extern unsigned int zlib_dfltcc_support;
 #define ZLIB_DFLTCC_DISABLED		0
 #define ZLIB_DFLTCC_FULL		1
@@ -87,7 +90,6 @@ extern unsigned int zlib_dfltcc_support;
 
 extern int noexec_disabled;
 extern unsigned long ident_map_size;
-extern unsigned long vmalloc_size;
 
 /* The Write Back bit position in the physaddr is given by the SLPC PCI */
 extern unsigned long mio_wb_bit_mask;
@@ -109,6 +111,7 @@ extern unsigned long mio_wb_bit_mask;
 #define MACHINE_HAS_NX		(S390_lowcore.machine_flags & MACHINE_FLAG_NX)
 #define MACHINE_HAS_GS		(S390_lowcore.machine_flags & MACHINE_FLAG_GS)
 #define MACHINE_HAS_SCC		(S390_lowcore.machine_flags & MACHINE_FLAG_SCC)
+#define MACHINE_HAS_PCI_MIO	(S390_lowcore.machine_flags & MACHINE_FLAG_PCI_MIO)
 
 /*
  * Console mode. Override with conmode=
@@ -157,6 +160,8 @@ static inline unsigned long kaslr_offset(void)
 {
 	return __kaslr_offset;
 }
+
+extern int is_full_image;
 
 static inline u32 gen_lpswe(unsigned long addr)
 {

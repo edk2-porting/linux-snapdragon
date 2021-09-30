@@ -165,7 +165,7 @@ static void panfrost_job_hw_submit(struct panfrost_job *job, int js)
 		return;
 	}
 
-	cfg = panfrost_mmu_as_get(pfdev, &job->file_priv->mmu);
+	cfg = panfrost_mmu_as_get(pfdev, job->file_priv->mmu);
 
 	job_write(pfdev, JS_HEAD_NEXT_LO(js), jc_head & 0xFFFFFFFF);
 	job_write(pfdev, JS_HEAD_NEXT_HI(js), jc_head >> 32);
@@ -203,7 +203,7 @@ static void panfrost_acquire_object_fences(struct drm_gem_object **bos,
 	int i;
 
 	for (i = 0; i < bo_count; i++)
-		implicit_fences[i] = dma_resv_get_excl_rcu(bos[i]->resv);
+		implicit_fences[i] = dma_resv_get_excl_unlocked(bos[i]->resv);
 }
 
 static void panfrost_attach_object_fences(struct drm_gem_object **bos,
@@ -527,7 +527,7 @@ static irqreturn_t panfrost_job_irq_handler(int irq, void *data)
 			if (job) {
 				pfdev->jobs[j] = NULL;
 
-				panfrost_mmu_as_put(pfdev, &job->file_priv->mmu);
+				panfrost_mmu_as_put(pfdev, job->file_priv->mmu);
 				panfrost_devfreq_record_idle(&pfdev->pfdevfreq);
 
 				dma_fence_signal_locked(job->done_fence);

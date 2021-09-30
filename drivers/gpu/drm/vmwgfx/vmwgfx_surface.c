@@ -680,7 +680,7 @@ static void vmw_user_surface_free(struct vmw_resource *res)
 }
 
 /**
- * vmw_user_surface_free - User visible surface TTM base object destructor
+ * vmw_user_surface_base_release - User visible surface TTM base object destructor
  *
  * @p_base:         Pointer to a pointer to a TTM base object
  *                  embedded in a struct vmw_user_surface.
@@ -702,7 +702,7 @@ static void vmw_user_surface_base_release(struct ttm_base_object **p_base)
 }
 
 /**
- * vmw_user_surface_destroy_ioctl - Ioctl function implementing
+ * vmw_surface_destroy_ioctl - Ioctl function implementing
  *                                  the user surface destroy functionality.
  *
  * @dev:            Pointer to a struct drm_device.
@@ -719,7 +719,7 @@ int vmw_surface_destroy_ioctl(struct drm_device *dev, void *data,
 }
 
 /**
- * vmw_user_surface_define_ioctl - Ioctl function implementing
+ * vmw_surface_define_ioctl - Ioctl function implementing
  *                                  the user surface define functionality.
  *
  * @dev:            Pointer to a struct drm_device.
@@ -778,10 +778,6 @@ int vmw_surface_define_ioctl(struct drm_device *dev, void *data,
 			       req->format);
 		return -EINVAL;
 	}
-
-	ret = ttm_read_lock(&dev_priv->reservation_sem, true);
-	if (unlikely(ret != 0))
-		return ret;
 
 	ret = ttm_mem_global_alloc(vmw_mem_glob(dev_priv),
 				   size, &ctx);
@@ -869,7 +865,7 @@ int vmw_surface_define_ioctl(struct drm_device *dev, void *data,
 	user_srf->prime.base.shareable = false;
 	user_srf->prime.base.tfile = NULL;
 	if (drm_is_primary_client(file_priv))
-		user_srf->master = drm_master_get(file_priv->master);
+		user_srf->master = drm_file_get_master(file_priv);
 
 	/**
 	 * From this point, the generic resource management functions
@@ -913,7 +909,6 @@ int vmw_surface_define_ioctl(struct drm_device *dev, void *data,
 	rep->sid = user_srf->prime.base.handle;
 	vmw_resource_unreference(&res);
 
-	ttm_read_unlock(&dev_priv->reservation_sem);
 	return 0;
 out_no_copy:
 	kfree(srf->offsets);
@@ -924,7 +919,6 @@ out_no_sizes:
 out_no_user_srf:
 	ttm_mem_global_free(vmw_mem_glob(dev_priv), size);
 out_unlock:
-	ttm_read_unlock(&dev_priv->reservation_sem);
 	return ret;
 }
 
@@ -1007,7 +1001,7 @@ out_no_lookup:
 }
 
 /**
- * vmw_user_surface_define_ioctl - Ioctl function implementing
+ * vmw_surface_reference_ioctl - Ioctl function implementing
  *                                  the user surface reference functionality.
  *
  * @dev:            Pointer to a struct drm_device.
@@ -1061,7 +1055,7 @@ int vmw_surface_reference_ioctl(struct drm_device *dev, void *data,
 }
 
 /**
- * vmw_surface_define_encode - Encode a surface_define command.
+ * vmw_gb_surface_create - Encode a surface_define command.
  *
  * @res:        Pointer to a struct vmw_resource embedded in a struct
  *              vmw_surface.
@@ -1218,7 +1212,7 @@ static int vmw_gb_surface_bind(struct vmw_resource *res,
 	uint32_t submit_size;
 	struct ttm_buffer_object *bo = val_buf->bo;
 
-	BUG_ON(bo->mem.mem_type != VMW_PL_MOB);
+	BUG_ON(bo->resource->mem_type != VMW_PL_MOB);
 
 	submit_size = sizeof(*cmd1) + (res->backup_dirty ? sizeof(*cmd2) : 0);
 
@@ -1229,7 +1223,7 @@ static int vmw_gb_surface_bind(struct vmw_resource *res,
 	cmd1->header.id = SVGA_3D_CMD_BIND_GB_SURFACE;
 	cmd1->header.size = sizeof(cmd1->body);
 	cmd1->body.sid = res->id;
-	cmd1->body.mobid = bo->mem.start;
+	cmd1->body.mobid = bo->resource->start;
 	if (res->backup_dirty) {
 		cmd2 = (void *) &cmd1[1];
 		cmd2->header.id = SVGA_3D_CMD_UPDATE_GB_SURFACE;
@@ -1272,7 +1266,7 @@ static int vmw_gb_surface_unbind(struct vmw_resource *res,
 	uint8_t *cmd;
 
 
-	BUG_ON(bo->mem.mem_type != VMW_PL_MOB);
+	BUG_ON(bo->resource->mem_type != VMW_PL_MOB);
 
 	submit_size = sizeof(*cmd3) + (readback ? sizeof(*cmd1) : sizeof(*cmd2));
 	cmd = VMW_CMD_RESERVE(dev_priv, submit_size);
@@ -1540,11 +1534,7 @@ vmw_gb_surface_define_internal(struct drm_device *dev,
 
 	user_srf = container_of(srf, struct vmw_user_surface, srf);
 	if (drm_is_primary_client(file_priv))
-		user_srf->master = drm_master_get(file_priv->master);
-
-	ret = ttm_read_lock(&dev_priv->reservation_sem, true);
-	if (unlikely(ret != 0))
-		return ret;
+		user_srf->master = drm_file_get_master(file_priv);
 
 	res = &user_srf->srf.res;
 
@@ -1627,7 +1617,6 @@ vmw_gb_surface_define_internal(struct drm_device *dev,
 	vmw_resource_unreference(&res);
 
 out_unlock:
-	ttm_read_unlock(&dev_priv->reservation_sem);
 	return ret;
 }
 
@@ -1883,7 +1872,6 @@ static void vmw_surface_dirty_range_add(struct vmw_resource *res, size_t start,
 static int vmw_surface_dirty_sync(struct vmw_resource *res)
 {
 	struct vmw_private *dev_priv = res->dev_priv;
-	bool has_dx = 0;
 	u32 i, num_dirty;
 	struct vmw_surface_dirty *dirty =
 		(struct vmw_surface_dirty *) res->dirty;
@@ -1910,7 +1898,7 @@ static int vmw_surface_dirty_sync(struct vmw_resource *res)
 	if (!num_dirty)
 		goto out;
 
-	alloc_size = num_dirty * ((has_dx) ? sizeof(*cmd1) : sizeof(*cmd2));
+	alloc_size = num_dirty * ((has_sm4_context(dev_priv)) ? sizeof(*cmd1) : sizeof(*cmd2));
 	cmd = VMW_CMD_RESERVE(dev_priv, alloc_size);
 	if (!cmd)
 		return -ENOMEM;
@@ -1928,7 +1916,7 @@ static int vmw_surface_dirty_sync(struct vmw_resource *res)
 		 * DX_UPDATE_SUBRESOURCE is aware of array surfaces.
 		 * UPDATE_GB_IMAGE is not.
 		 */
-		if (has_dx) {
+		if (has_sm4_context(dev_priv)) {
 			cmd1->header.id = SVGA_3D_CMD_DX_UPDATE_SUBRESOURCE;
 			cmd1->header.size = sizeof(cmd1->body);
 			cmd1->body.sid = res->id;
@@ -2125,10 +2113,6 @@ int vmw_gb_surface_define(struct vmw_private *dev_priv,
 	if (req->sizes != NULL)
 		return -EINVAL;
 
-	ret = ttm_read_lock(&dev_priv->reservation_sem, true);
-	if (unlikely(ret != 0))
-		return ret;
-
 	ret = ttm_mem_global_alloc(vmw_mem_glob(dev_priv),
 				   user_accounting_size, &ctx);
 	if (ret != 0) {
@@ -2192,13 +2176,11 @@ int vmw_gb_surface_define(struct vmw_private *dev_priv,
 	 */
 	ret = vmw_surface_init(dev_priv, srf, vmw_user_surface_free);
 
-	ttm_read_unlock(&dev_priv->reservation_sem);
 	return ret;
 
 out_no_user_srf:
 	ttm_mem_global_free(vmw_mem_glob(dev_priv), user_accounting_size);
 
 out_unlock:
-	ttm_read_unlock(&dev_priv->reservation_sem);
 	return ret;
 }

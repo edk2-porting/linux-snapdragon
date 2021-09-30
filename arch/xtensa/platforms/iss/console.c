@@ -100,16 +100,10 @@ static void rs_flush_chars(struct tty_struct *tty)
 {
 }
 
-static int rs_write_room(struct tty_struct *tty)
+static unsigned int rs_write_room(struct tty_struct *tty)
 {
 	/* Let's say iss can always accept 2K characters.. */
 	return 2 * 1024;
-}
-
-static int rs_chars_in_buffer(struct tty_struct *tty)
-{
-	/* the iss doesn't buffer characters */
-	return 0;
 }
 
 static void rs_hangup(struct tty_struct *tty)
@@ -135,7 +129,6 @@ static const struct tty_operations serial_ops = {
 	.put_char = rs_put_char,
 	.flush_chars = rs_flush_chars,
 	.write_room = rs_write_room,
-	.chars_in_buffer = rs_chars_in_buffer,
 	.hangup = rs_hangup,
 	.wait_until_sent = rs_wait_until_sent,
 	.proc_show = rs_proc_show,
@@ -143,9 +136,13 @@ static const struct tty_operations serial_ops = {
 
 static int __init rs_init(void)
 {
-	tty_port_init(&serial_port);
+	int ret;
 
 	serial_driver = alloc_tty_driver(SERIAL_MAX_NUM_LINES);
+	if (!serial_driver)
+		return -ENOMEM;
+
+	tty_port_init(&serial_port);
 
 	/* Initialize the tty_driver structure */
 
@@ -163,8 +160,15 @@ static int __init rs_init(void)
 	tty_set_operations(serial_driver, &serial_ops);
 	tty_port_link_device(&serial_port, serial_driver, 0);
 
-	if (tty_register_driver(serial_driver))
-		panic("Couldn't register serial driver\n");
+	ret = tty_register_driver(serial_driver);
+	if (ret) {
+		pr_err("Couldn't register serial driver\n");
+		tty_driver_kref_put(serial_driver);
+		tty_port_destroy(&serial_port);
+
+		return ret;
+	}
+
 	return 0;
 }
 

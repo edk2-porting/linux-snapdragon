@@ -511,7 +511,7 @@ size_t sve_state_size(struct task_struct const *task)
 void sve_alloc(struct task_struct *task)
 {
 	if (task->thread.sve_state) {
-		memset(task->thread.sve_state, 0, sve_state_size(current));
+		memset(task->thread.sve_state, 0, sve_state_size(task));
 		return;
 	}
 
@@ -957,8 +957,10 @@ void do_sve_acc(unsigned int esr, struct pt_regs *regs)
 	 * disabling the trap, otherwise update our in-memory copy.
 	 */
 	if (!test_thread_flag(TIF_FOREIGN_FPSTATE)) {
-		sve_set_vq(sve_vq_from_vl(current->thread.sve_vl) - 1);
-		sve_flush_live();
+		unsigned long vq_minus_one =
+			sve_vq_from_vl(current->thread.sve_vl) - 1;
+		sve_set_vq(vq_minus_one);
+		sve_flush_live(vq_minus_one);
 		fpsimd_bind_task_to_cpu();
 	} else {
 		fpsimd_to_sve(current);
