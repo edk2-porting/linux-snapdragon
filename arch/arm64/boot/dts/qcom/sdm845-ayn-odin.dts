@@ -85,7 +85,6 @@
 		};
 	};
 
-	/*
 	gpio_keys {
 		compatible = "gpio-keys";
 		autorepeat;
@@ -99,8 +98,6 @@
 			gpios = <&pm8998_gpio 6 GPIO_ACTIVE_LOW>;
 		};
 	};
-	*/
-
 };
 
 
@@ -555,7 +552,7 @@
 	firmware-name = "qcom/mba.mbn", "qcom/modem.mbn";
 };
 
-/*
+
 &pm8998_gpio {
 	vol_up_pin_a: vol-up-active {
 		pins = "gpio6";
@@ -574,7 +571,7 @@
 		bias-pull-up;
 		linux,code = <KEY_VOLUMEDOWN>;
 	};
-};*/
+};
 
 &qupv3_id_0 {
 	status = "okay";
