@@ -97,6 +97,84 @@
 			linux,code = <KEY_VOLUMEUP>;
 			gpios = <&pm8998_gpio 6 GPIO_ACTIVE_LOW>;
 		};
+
+		home {
+			label = "HOME";
+			linux,code = <KEY_HOME>;
+			gpios = <&tlmm 49 GPIO_ACTIVE_LOW>;
+		};
+
+		select {
+			label = "SELECT";
+			linux,code = <BTN_SELECT>;
+			gpios = <&tlmm 0 GPIO_ACTIVE_LOW>;
+		};
+
+		start {
+			label = "START";
+			linux,code = <BTN_START>;
+			gpios = <&tlmm 3 GPIO_ACTIVE_LOW>;
+		};
+
+		up {
+			label = "UP";
+			linux,code = <BTN_DPAD_UP>;
+			gpios = <&tlmm 124 GPIO_ACTIVE_LOW>;
+		};
+
+		down {
+			label = "DOWN";
+			linux,code = <BTN_DPAD_DOWN>;
+			gpios = <&tlmm 128 GPIO_ACTIVE_LOW>;
+		};
+
+		left {
+			label = "LEFT";
+			linux,code = <BTN_DPAD_LEFT>;
+			gpios = <&tlmm 52 GPIO_ACTIVE_LOW>;
+		};
+
+		right {
+			label = "RIGHT";
+			linux,code = <BTN_DPAD_RIGHT>;
+			gpios = <&tlmm 122 GPIO_ACTIVE_LOW>;
+		};
+
+		x {
+			label = "Button X";
+			linux,code = <BTN_X>;
+			gpios = <&tlmm 92 GPIO_ACTIVE_LOW>;
+		};
+
+		y {
+			label = "Button Y";
+			linux,code = <BTN_Y>;
+			gpios = <&tlmm 41 GPIO_ACTIVE_LOW>;
+		};
+
+		a {
+			label = "Button A";
+			linux,code = <BTN_A>;
+			gpios = <&tlmm 96 GPIO_ACTIVE_LOW>;
+		};
+
+		b {
+			label = "Button B";
+			linux,code = <BTN_B>;
+			gpios = <&tlmm 95 GPIO_ACTIVE_LOW>;
+		};
+
+		r {
+			label = "Button R";
+			linux,code = <BTN_TR>;
+			gpios = <&tlmm 91 GPIO_ACTIVE_LOW>;
+		};
+
+		l {
+			label = "Button L";
+			linux,code = <BTN_TL>;
+			gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
+		};
 	};
 };
 
