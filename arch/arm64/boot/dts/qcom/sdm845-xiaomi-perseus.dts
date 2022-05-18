@@ -129,8 +129,8 @@
 
 &ipa {
 	status = "okay";
-	modem-init;
 	memory-region = <&ipa_fw_mem>;
+	firmware-name = "qcom/sdm845/xiaomi/ipa_fws.mbn";
 };
 
 &i2c5 {
