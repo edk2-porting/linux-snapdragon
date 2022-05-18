@@ -1,3 +1,5 @@
+.. SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+
 ================
 bpftool-gen
 ================
@@ -7,12 +9,14 @@ tool for BPF code-generation
 
 :Manual section: 8
 
+.. include:: substitutions.rst
+
 SYNOPSIS
 ========
 
 	**bpftool** [*OPTIONS*] **gen** *COMMAND*
 
-	*OPTIONS* := { { **-j** | **--json** } [{ **-p** | **--pretty** }] }
+	*OPTIONS* := { |COMMON_OPTIONS| | { **-L** | **--use-loader** } }
 
 	*COMMAND* := { **object** | **skeleton** | **help** }
 
@@ -151,6 +155,12 @@ DESCRIPTION
 OPTIONS
 =======
 	.. include:: common_options.rst
+
+	-L, --use-loader
+		  For skeletons, generate a "light" skeleton (also known as "loader"
+		  skeleton). A light skeleton contains a loader eBPF program. It does
+		  not use the majority of the libbpf infrastructure, and does not need
+		  libelf.
 
 EXAMPLES
 ========

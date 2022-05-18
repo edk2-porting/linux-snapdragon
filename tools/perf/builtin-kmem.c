@@ -192,7 +192,7 @@ static int evsel__process_alloc_node_event(struct evsel *evsel, struct perf_samp
 	int ret = evsel__process_alloc_event(evsel, sample);
 
 	if (!ret) {
-		int node1 = cpu__get_node(sample->cpu),
+		int node1 = cpu__get_node((struct perf_cpu){.cpu = sample->cpu}),
 		    node2 = evsel__intval(evsel, sample, "node");
 
 		if (node1 != node2)
@@ -1953,7 +1953,7 @@ int cmd_kmem(int argc, const char **argv)
 
 	data.path = input_name;
 
-	kmem_session = session = perf_session__new(&data, false, &perf_kmem);
+	kmem_session = session = perf_session__new(&data, &perf_kmem);
 	if (IS_ERR(session))
 		return PTR_ERR(session);
 

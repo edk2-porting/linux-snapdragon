@@ -20,6 +20,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/units.h>
 #include <asm/unaligned.h>
 
 #define EBU_CLC			0x000
@@ -102,7 +103,6 @@
 
 #define MAX_CS	2
 
-#define HZ_PER_MHZ	1000000L
 #define USEC_PER_SEC	1000000L
 
 struct ebu_nand_cs {
@@ -609,6 +609,11 @@ static int ebu_nand_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to get chip select: %d\n", ret);
 		return ret;
 	}
+	if (cs >= MAX_CS) {
+		dev_err(dev, "got invalid chip select: %d\n", cs);
+		return -EINVAL;
+	}
+
 	ebu_host->cs_num = cs;
 
 	resname = devm_kasprintf(dev, GFP_KERNEL, "nand_cs%d", cs);

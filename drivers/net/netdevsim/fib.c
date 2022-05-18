@@ -623,14 +623,14 @@ static int nsim_fib6_rt_append(struct nsim_fib_data *data,
 		if (err)
 			goto err_fib6_rt_nh_del;
 
-		fib6_event->rt_arr[i]->trap = true;
+		WRITE_ONCE(fib6_event->rt_arr[i]->trap, true);
 	}
 
 	return 0;
 
 err_fib6_rt_nh_del:
 	for (i--; i >= 0; i--) {
-		fib6_event->rt_arr[i]->trap = false;
+		WRITE_ONCE(fib6_event->rt_arr[i]->trap, false);
 		nsim_fib6_rt_nh_del(fib6_rt, fib6_event->rt_arr[i]);
 	}
 	return err;
@@ -1441,7 +1441,7 @@ static u64 nsim_fib_nexthops_res_occ_get(void *priv)
 static void nsim_fib_set_max_all(struct nsim_fib_data *data,
 				 struct devlink *devlink)
 {
-	enum nsim_resource_id res_ids[] = {
+	static const enum nsim_resource_id res_ids[] = {
 		NSIM_RESOURCE_IPV4_FIB, NSIM_RESOURCE_IPV4_FIB_RULES,
 		NSIM_RESOURCE_IPV6_FIB, NSIM_RESOURCE_IPV6_FIB_RULES,
 		NSIM_RESOURCE_NEXTHOPS,

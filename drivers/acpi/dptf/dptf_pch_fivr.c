@@ -46,7 +46,7 @@ release_buffer:
 }
 
 /*
- * Presentation of attributes which are defined for INT1045
+ * Presentation of attributes which are defined for INTC10xx
  * They are:
  * freq_mhz_low_clock : Set PCH FIVR switching freq for
  *			FIVR clock 19.2MHz and 24MHz
@@ -90,15 +90,24 @@ static ssize_t name##_store(struct device *dev,\
 
 PCH_FIVR_SHOW(freq_mhz_low_clock, GFC0)
 PCH_FIVR_SHOW(freq_mhz_high_clock, GFC1)
+PCH_FIVR_SHOW(ssc_clock_info, GEMI)
+PCH_FIVR_SHOW(fivr_switching_freq_mhz, GFCS)
+PCH_FIVR_SHOW(fivr_switching_fault_status, GFFS)
 PCH_FIVR_STORE(freq_mhz_low_clock, RFC0)
 PCH_FIVR_STORE(freq_mhz_high_clock, RFC1)
 
 static DEVICE_ATTR_RW(freq_mhz_low_clock);
 static DEVICE_ATTR_RW(freq_mhz_high_clock);
+static DEVICE_ATTR_RO(ssc_clock_info);
+static DEVICE_ATTR_RO(fivr_switching_freq_mhz);
+static DEVICE_ATTR_RO(fivr_switching_fault_status);
 
 static struct attribute *fivr_attrs[] = {
 	&dev_attr_freq_mhz_low_clock.attr,
 	&dev_attr_freq_mhz_high_clock.attr,
+	&dev_attr_ssc_clock_info.attr,
+	&dev_attr_fivr_switching_freq_mhz.attr,
+	&dev_attr_fivr_switching_fault_status.attr,
 	NULL
 };
 
@@ -142,6 +151,7 @@ static int pch_fivr_remove(struct platform_device *pdev)
 static const struct acpi_device_id pch_fivr_device_ids[] = {
 	{"INTC1045", 0},
 	{"INTC1049", 0},
+	{"INTC10A3", 0},
 	{"", 0},
 };
 MODULE_DEVICE_TABLE(acpi, pch_fivr_device_ids);

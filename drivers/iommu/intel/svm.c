@@ -31,8 +31,6 @@ static irqreturn_t prq_event_thread(int irq, void *d);
 static void intel_svm_drain_prq(struct device *dev, u32 pasid);
 #define to_intel_svm_dev(handle) container_of(handle, struct intel_svm_dev, sva)
 
-#define PRQ_ORDER 0
-
 static DEFINE_XARRAY_ALLOC(pasid_private_array);
 static int pasid_private_add(ioasid_t pasid, void *priv)
 {
@@ -507,21 +505,6 @@ out:
 	return ret;
 }
 
-static void _load_pasid(void *unused)
-{
-	update_pasid();
-}
-
-static void load_pasid(struct mm_struct *mm, u32 pasid)
-{
-	mutex_lock(&mm->context.lock);
-
-	/* Update PASID MSR on all CPUs running the mm's tasks. */
-	on_each_cpu_mask(mm_cpumask(mm), _load_pasid, NULL, true);
-
-	mutex_unlock(&mm->context.lock);
-}
-
 static int intel_svm_alloc_pasid(struct device *dev, struct mm_struct *mm,
 				 unsigned int flags)
 {
@@ -616,10 +599,6 @@ static struct iommu_sva *intel_svm_bind_mm(struct intel_iommu *iommu,
 	if (ret)
 		goto free_sdev;
 
-	/* The newly allocated pasid is loaded to the mm. */
-	if (!(flags & SVM_FLAG_SUPERVISOR_MODE) && list_empty(&svm->devs))
-		load_pasid(mm, svm->pasid);
-
 	list_add_rcu(&sdev->list, &svm->devs);
 success:
 	return &sdev->sva;
@@ -672,11 +651,8 @@ static int intel_svm_unbind_mm(struct device *dev, u32 pasid)
 			kfree_rcu(sdev, rcu);
 
 			if (list_empty(&svm->devs)) {
-				if (svm->notifier.ops) {
+				if (svm->notifier.ops)
 					mmu_notifier_unregister(&svm->notifier, mm);
-					/* Clear mm's pasid. */
-					load_pasid(mm, PASID_DISABLED);
-				}
 				pasid_private_remove(svm->pasid);
 				/* We mandate that no page faults may be outstanding
 				 * for the PASID when intel_svm_unbind_mm() is called.
@@ -721,8 +697,6 @@ struct page_req_dsc {
 	};
 	u64 priv_data[2];
 };
-
-#define PRQ_RING_MASK	((0x1000 << PRQ_ORDER) - 0x20)
 
 static bool is_canonical_address(u64 addr)
 {
@@ -981,6 +955,10 @@ bad_req:
 			       iommu->name);
 			goto bad_req;
 		}
+
+		/* Drop Stop Marker message. No need for a response. */
+		if (unlikely(req->lpig && !req->rd_req && !req->wr_req))
+			goto prq_advance;
 
 		if (!svm || svm->pasid != req->pasid) {
 			/*

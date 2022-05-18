@@ -9,7 +9,7 @@
 
 enum HCLGE_MBX_OPCODE {
 	HCLGE_MBX_RESET = 0x01,		/* (VF -> PF) assert reset */
-	HCLGE_MBX_ASSERTING_RESET,	/* (PF -> VF) PF is asserting reset*/
+	HCLGE_MBX_ASSERTING_RESET,	/* (PF -> VF) PF is asserting reset */
 	HCLGE_MBX_SET_UNICAST,		/* (VF -> PF) set UC addr */
 	HCLGE_MBX_SET_MULTICAST,	/* (VF -> PF) set MC addr */
 	HCLGE_MBX_SET_VLAN,		/* (VF -> PF) set VLAN */
@@ -79,6 +79,9 @@ enum hclge_mbx_tbl_cfg_subcode {
 #define HCLGE_MBX_MAX_MSG_SIZE	14
 #define HCLGE_MBX_MAX_RESP_DATA_SIZE	8U
 #define HCLGE_MBX_MAX_RING_CHAIN_PARAM_NUM	4
+
+#define HCLGE_RESET_SCHED_TIMEOUT	(3 * HZ)
+#define HCLGE_MBX_SCHED_TIMEOUT	(HZ / 2)
 
 struct hclge_ring_chain_param {
 	u8 ring_type;

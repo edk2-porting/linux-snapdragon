@@ -47,9 +47,6 @@
 #include "ast_drv.h"
 #include "ast_tables.h"
 
-static struct ast_i2c_chan *ast_i2c_create(struct drm_device *dev);
-static void ast_i2c_destroy(struct ast_i2c_chan *i2c);
-
 static inline void ast_load_palette_index(struct ast_private *ast,
 				     u8 index, u8 red, u8 green,
 				     u8 blue)
@@ -275,7 +272,7 @@ static void ast_set_std_reg(struct ast_private *ast,
 	ast_set_index_reg_mask(ast, AST_IO_SEQ_PORT, 0x01, 0xdf, stdtable->seq[0]);
 	for (i = 1; i < 4; i++) {
 		jreg = stdtable->seq[i];
-		ast_set_index_reg(ast, AST_IO_SEQ_PORT, (i + 1) , jreg);
+		ast_set_index_reg(ast, AST_IO_SEQ_PORT, (i + 1), jreg);
 	}
 
 	/* Set CRTC; except base address and offset */
@@ -498,13 +495,15 @@ static void ast_set_sync_reg(struct ast_private *ast,
 
 	jreg  = ast_io_read8(ast, AST_IO_MISC_PORT_READ);
 	jreg &= ~0xC0;
-	if (vbios_mode->enh_table->flags & NVSync) jreg |= 0x80;
-	if (vbios_mode->enh_table->flags & NHSync) jreg |= 0x40;
+	if (vbios_mode->enh_table->flags & NVSync)
+		jreg |= 0x80;
+	if (vbios_mode->enh_table->flags & NHSync)
+		jreg |= 0x40;
 	ast_io_write8(ast, AST_IO_MISC_PORT_WRITE, jreg);
 }
 
 static void ast_set_start_address_crt1(struct ast_private *ast,
-				       unsigned offset)
+				       unsigned int offset)
 {
 	u32 addr;
 
@@ -612,8 +611,7 @@ ast_primary_plane_helper_atomic_disable(struct drm_plane *plane,
 }
 
 static const struct drm_plane_helper_funcs ast_primary_plane_helper_funcs = {
-	.prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
-	.cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
+	DRM_GEM_VRAM_PLANE_HELPER_FUNCS,
 	.atomic_check = ast_primary_plane_helper_atomic_check,
 	.atomic_update = ast_primary_plane_helper_atomic_update,
 	.atomic_disable = ast_primary_plane_helper_atomic_disable,
@@ -807,7 +805,7 @@ ast_cursor_plane_helper_atomic_update(struct drm_plane *plane,
 		ast_cursor_plane->hwc[ast_cursor_plane->next_hwc_index].map;
 	u64 dst_off =
 		ast_cursor_plane->hwc[ast_cursor_plane->next_hwc_index].off;
-	struct dma_buf_map src_map = shadow_plane_state->map[0];
+	struct dma_buf_map src_map = shadow_plane_state->data[0];
 	unsigned int offset_x, offset_y;
 	u16 x, y;
 	u8 x_offset, y_offset;
@@ -1120,7 +1118,10 @@ static void ast_crtc_reset(struct drm_crtc *crtc)
 	if (crtc->state)
 		crtc->funcs->atomic_destroy_state(crtc, crtc->state);
 
-	__drm_atomic_helper_crtc_reset(crtc, &ast_state->base);
+	if (ast_state)
+		__drm_atomic_helper_crtc_reset(crtc, &ast_state->base);
+	else
+		__drm_atomic_helper_crtc_reset(crtc, NULL);
 }
 
 static struct drm_crtc_state *
@@ -1209,9 +1210,10 @@ static int ast_get_modes(struct drm_connector *connector)
 {
 	struct ast_connector *ast_connector = to_ast_connector(connector);
 	struct ast_private *ast = to_ast_private(connector->dev);
-	struct edid *edid;
-	int ret;
+	struct edid *edid = NULL;
 	bool flags = false;
+	int ret;
+
 	if (ast->tx_chip_type == AST_TX_DP501) {
 		ast->dp501_maxclk = 0xff;
 		edid = kmalloc(128, GFP_KERNEL);
@@ -1224,15 +1226,15 @@ static int ast_get_modes(struct drm_connector *connector)
 		else
 			kfree(edid);
 	}
-	if (!flags)
+	if (!flags && ast_connector->i2c)
 		edid = drm_get_edid(connector, &ast_connector->i2c->adapter);
 	if (edid) {
 		drm_connector_update_edid_property(&ast_connector->base, edid);
 		ret = drm_add_edid_modes(connector, edid);
 		kfree(edid);
 		return ret;
-	} else
-		drm_connector_update_edid_property(&ast_connector->base, NULL);
+	}
+	drm_connector_update_edid_property(&ast_connector->base, NULL);
 	return 0;
 }
 
@@ -1272,32 +1274,30 @@ static enum drm_mode_status ast_mode_valid(struct drm_connector *connector,
 	}
 	switch (mode->hdisplay) {
 	case 640:
-		if (mode->vdisplay == 480) flags = MODE_OK;
+		if (mode->vdisplay == 480)
+			flags = MODE_OK;
 		break;
 	case 800:
-		if (mode->vdisplay == 600) flags = MODE_OK;
+		if (mode->vdisplay == 600)
+			flags = MODE_OK;
 		break;
 	case 1024:
-		if (mode->vdisplay == 768) flags = MODE_OK;
+		if (mode->vdisplay == 768)
+			flags = MODE_OK;
 		break;
 	case 1280:
-		if (mode->vdisplay == 1024) flags = MODE_OK;
+		if (mode->vdisplay == 1024)
+			flags = MODE_OK;
 		break;
 	case 1600:
-		if (mode->vdisplay == 1200) flags = MODE_OK;
+		if (mode->vdisplay == 1200)
+			flags = MODE_OK;
 		break;
 	default:
 		return flags;
 	}
 
 	return flags;
-}
-
-static void ast_connector_destroy(struct drm_connector *connector)
-{
-	struct ast_connector *ast_connector = to_ast_connector(connector);
-	ast_i2c_destroy(ast_connector->i2c);
-	drm_connector_cleanup(connector);
 }
 
 static const struct drm_connector_helper_funcs ast_connector_helper_funcs = {
@@ -1308,7 +1308,7 @@ static const struct drm_connector_helper_funcs ast_connector_helper_funcs = {
 static const struct drm_connector_funcs ast_connector_funcs = {
 	.reset = drm_atomic_helper_connector_reset,
 	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = ast_connector_destroy,
+	.destroy = drm_connector_cleanup,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -1324,10 +1324,13 @@ static int ast_connector_init(struct drm_device *dev)
 	if (!ast_connector->i2c)
 		drm_err(dev, "failed to add ddc bus for connector\n");
 
-	drm_connector_init_with_ddc(dev, connector,
-				    &ast_connector_funcs,
-				    DRM_MODE_CONNECTOR_VGA,
-				    &ast_connector->i2c->adapter);
+	if (ast_connector->i2c)
+		drm_connector_init_with_ddc(dev, connector, &ast_connector_funcs,
+					    DRM_MODE_CONNECTOR_VGA,
+					    &ast_connector->i2c->adapter);
+	else
+		drm_connector_init(dev, connector, &ast_connector_funcs,
+				   DRM_MODE_CONNECTOR_VGA);
 
 	drm_connector_helper_add(connector, &ast_connector_helper_funcs);
 
@@ -1404,125 +1407,4 @@ int ast_mode_config_init(struct ast_private *ast)
 	drm_mode_config_reset(dev);
 
 	return 0;
-}
-
-static int get_clock(void *i2c_priv)
-{
-	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
-	uint32_t val, val2, count, pass;
-
-	count = 0;
-	pass = 0;
-	val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
-	do {
-		val2 = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
-		if (val == val2) {
-			pass++;
-		} else {
-			pass = 0;
-			val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x10) >> 4) & 0x01;
-		}
-	} while ((pass < 5) && (count++ < 0x10000));
-
-	return val & 1 ? 1 : 0;
-}
-
-static int get_data(void *i2c_priv)
-{
-	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
-	uint32_t val, val2, count, pass;
-
-	count = 0;
-	pass = 0;
-	val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
-	do {
-		val2 = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
-		if (val == val2) {
-			pass++;
-		} else {
-			pass = 0;
-			val = (ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x20) >> 5) & 0x01;
-		}
-	} while ((pass < 5) && (count++ < 0x10000));
-
-	return val & 1 ? 1 : 0;
-}
-
-static void set_clock(void *i2c_priv, int clock)
-{
-	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
-	int i;
-	u8 ujcrb7, jtemp;
-
-	for (i = 0; i < 0x10000; i++) {
-		ujcrb7 = ((clock & 0x01) ? 0 : 1);
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0xf4, ujcrb7);
-		jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x01);
-		if (ujcrb7 == jtemp)
-			break;
-	}
-}
-
-static void set_data(void *i2c_priv, int data)
-{
-	struct ast_i2c_chan *i2c = i2c_priv;
-	struct ast_private *ast = to_ast_private(i2c->dev);
-	int i;
-	u8 ujcrb7, jtemp;
-
-	for (i = 0; i < 0x10000; i++) {
-		ujcrb7 = ((data & 0x01) ? 0 : 1) << 2;
-		ast_set_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0xf1, ujcrb7);
-		jtemp = ast_get_index_reg_mask(ast, AST_IO_CRTC_PORT, 0xb7, 0x04);
-		if (ujcrb7 == jtemp)
-			break;
-	}
-}
-
-static struct ast_i2c_chan *ast_i2c_create(struct drm_device *dev)
-{
-	struct ast_i2c_chan *i2c;
-	int ret;
-
-	i2c = kzalloc(sizeof(struct ast_i2c_chan), GFP_KERNEL);
-	if (!i2c)
-		return NULL;
-
-	i2c->adapter.owner = THIS_MODULE;
-	i2c->adapter.class = I2C_CLASS_DDC;
-	i2c->adapter.dev.parent = dev->dev;
-	i2c->dev = dev;
-	i2c_set_adapdata(&i2c->adapter, i2c);
-	snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
-		 "AST i2c bit bus");
-	i2c->adapter.algo_data = &i2c->bit;
-
-	i2c->bit.udelay = 20;
-	i2c->bit.timeout = 2;
-	i2c->bit.data = i2c;
-	i2c->bit.setsda = set_data;
-	i2c->bit.setscl = set_clock;
-	i2c->bit.getsda = get_data;
-	i2c->bit.getscl = get_clock;
-	ret = i2c_bit_add_bus(&i2c->adapter);
-	if (ret) {
-		drm_err(dev, "Failed to register bit i2c\n");
-		goto out_free;
-	}
-
-	return i2c;
-out_free:
-	kfree(i2c);
-	return NULL;
-}
-
-static void ast_i2c_destroy(struct ast_i2c_chan *i2c)
-{
-	if (!i2c)
-		return;
-	i2c_del_adapter(&i2c->adapter);
-	kfree(i2c);
 }

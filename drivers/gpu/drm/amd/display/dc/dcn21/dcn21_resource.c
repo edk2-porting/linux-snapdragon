@@ -35,6 +35,8 @@
 #include "include/irq_service_interface.h"
 #include "dcn20/dcn20_resource.h"
 
+#include "dml/dcn20/dcn20_fpu.h"
+
 #include "clk_mgr.h"
 #include "dcn10/dcn10_hubp.h"
 #include "dcn10/dcn10_ipp.h"
@@ -782,9 +784,8 @@ static const struct dce_i2c_mask i2c_masks = {
 		I2C_COMMON_MASK_SH_LIST_DCN2(_MASK)
 };
 
-struct dce_i2c_hw *dcn21_i2c_hw_create(
-	struct dc_context *ctx,
-	uint32_t inst)
+static struct dce_i2c_hw *dcn21_i2c_hw_create(struct dc_context *ctx,
+					      uint32_t inst)
 {
 	struct dce_i2c_hw *dce_i2c_hw =
 		kzalloc(sizeof(struct dce_i2c_hw), GFP_KERNEL);
@@ -884,7 +885,8 @@ static const struct dc_debug_options debug_defaults_drv = {
 		.disable_48mhz_pwrdwn = false,
 		.usbc_combo_phy_reset_wa = true,
 		.dmub_command_table = true,
-		.use_max_lb = true
+		.use_max_lb = true,
+		.optimize_edp_link_rate = true
 };
 
 static const struct dc_debug_options debug_defaults_diags = {
@@ -1090,7 +1092,7 @@ static void patch_bounding_box(struct dc *dc, struct _vcs_dpi_soc_bounding_box_s
 	}
 }
 
-void dcn21_calculate_wm(
+static void dcn21_calculate_wm(
 		struct dc *dc, struct dc_state *context,
 		display_e2e_pipe_params_st *pipes,
 		int *out_pipe_cnt,
@@ -1387,7 +1389,7 @@ validate_out:
  * with DC_FP_START()/DC_FP_END(). Use the same approach as for
  * dcn20_validate_bandwidth in dcn20_resource.c.
  */
-bool dcn21_validate_bandwidth(struct dc *dc, struct dc_state *context,
+static bool dcn21_validate_bandwidth(struct dc *dc, struct dc_state *context,
 		bool fast_validate)
 {
 	bool voltage_supported;
@@ -1425,6 +1427,7 @@ static struct clock_source *dcn21_clock_source_create(
 		return &clk_src->base;
 	}
 
+	kfree(clk_src);
 	BREAK_TO_DEBUGGER();
 	return NULL;
 }
@@ -1477,8 +1480,8 @@ static struct hubbub *dcn21_hubbub_create(struct dc_context *ctx)
 	return &hubbub->base;
 }
 
-struct output_pixel_processor *dcn21_opp_create(
-	struct dc_context *ctx, uint32_t inst)
+static struct output_pixel_processor *dcn21_opp_create(struct dc_context *ctx,
+						       uint32_t inst)
 {
 	struct dcn20_opp *opp =
 		kzalloc(sizeof(struct dcn20_opp), GFP_KERNEL);
@@ -1493,9 +1496,8 @@ struct output_pixel_processor *dcn21_opp_create(
 	return &opp->base;
 }
 
-struct timing_generator *dcn21_timing_generator_create(
-		struct dc_context *ctx,
-		uint32_t instance)
+static struct timing_generator *dcn21_timing_generator_create(struct dc_context *ctx,
+							      uint32_t instance)
 {
 	struct optc *tgn10 =
 		kzalloc(sizeof(struct optc), GFP_KERNEL);
@@ -1515,7 +1517,7 @@ struct timing_generator *dcn21_timing_generator_create(
 	return &tgn10->base;
 }
 
-struct mpc *dcn21_mpc_create(struct dc_context *ctx)
+static struct mpc *dcn21_mpc_create(struct dc_context *ctx)
 {
 	struct dcn20_mpc *mpc20 = kzalloc(sizeof(struct dcn20_mpc),
 					  GFP_KERNEL);
@@ -1542,8 +1544,8 @@ static void read_dce_straps(
 }
 
 
-struct display_stream_compressor *dcn21_dsc_create(
-	struct dc_context *ctx, uint32_t inst)
+static struct display_stream_compressor *dcn21_dsc_create(struct dc_context *ctx,
+							  uint32_t inst)
 {
 	struct dcn20_dsc *dsc =
 		kzalloc(sizeof(struct dcn20_dsc), GFP_KERNEL);
@@ -1680,9 +1682,8 @@ static struct dc_cap_funcs cap_funcs = {
 	.get_dcc_compression_cap = dcn20_get_dcc_compression_cap
 };
 
-struct stream_encoder *dcn21_stream_encoder_create(
-	enum engine_id eng_id,
-	struct dc_context *ctx)
+static struct stream_encoder *dcn21_stream_encoder_create(enum engine_id eng_id,
+							  struct dc_context *ctx)
 {
 	struct dcn10_stream_encoder *enc1 =
 		kzalloc(sizeof(struct dcn10_stream_encoder), GFP_KERNEL);
@@ -1914,7 +1915,7 @@ static int dcn21_populate_dml_pipes_from_context(
 	return pipe_cnt;
 }
 
-enum dc_status dcn21_patch_unknown_plane_state(struct dc_plane_state *plane_state)
+static enum dc_status dcn21_patch_unknown_plane_state(struct dc_plane_state *plane_state)
 {
 	enum dc_status result = DC_OK;
 
@@ -2024,6 +2025,8 @@ static bool dcn21_resource_construct(
 	dc->caps.color.mpc.ogam_rom_caps.pq = 0;
 	dc->caps.color.mpc.ogam_rom_caps.hlg = 0;
 	dc->caps.color.mpc.ocsc = 1;
+
+	dc->caps.hdmi_frl_pcon_support = true;
 
 	if (dc->ctx->dce_environment == DCE_ENV_PRODUCTION_DRV)
 		dc->debug = debug_defaults_drv;

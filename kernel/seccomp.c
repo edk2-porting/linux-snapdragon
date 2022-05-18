@@ -29,6 +29,9 @@
 #include <linux/syscalls.h>
 #include <linux/sysctl.h>
 
+/* Not exposed in headers: strictly internal use only. */
+#define SECCOMP_MODE_DEAD	(SECCOMP_MODE_FILTER + 1)
+
 #ifdef CONFIG_HAVE_ARCH_SECCOMP_FILTER
 #include <asm/syscall.h>
 #endif
@@ -922,30 +925,6 @@ void get_seccomp_filter(struct task_struct *tsk)
 	refcount_inc(&orig->users);
 }
 
-static void seccomp_init_siginfo(kernel_siginfo_t *info, int syscall, int reason)
-{
-	clear_siginfo(info);
-	info->si_signo = SIGSYS;
-	info->si_code = SYS_SECCOMP;
-	info->si_call_addr = (void __user *)KSTK_EIP(current);
-	info->si_errno = reason;
-	info->si_arch = syscall_get_arch(current);
-	info->si_syscall = syscall;
-}
-
-/**
- * seccomp_send_sigsys - signals the task to allow in-process syscall emulation
- * @syscall: syscall number to send to userland
- * @reason: filter-supplied reason code to send to userland (via si_errno)
- *
- * Forces a SIGSYS with a code of SYS_SECCOMP and related sigsys info.
- */
-static void seccomp_send_sigsys(int syscall, int reason)
-{
-	struct kernel_siginfo info;
-	seccomp_init_siginfo(&info, syscall, reason);
-	force_sig_info(&info);
-}
 #endif	/* CONFIG_SECCOMP_FILTER */
 
 /* For use with seccomp_actions_logged */
@@ -1034,6 +1013,7 @@ static void __secure_computing_strict(int this_syscall)
 #ifdef SECCOMP_DEBUG
 	dump_stack();
 #endif
+	current->seccomp.mode = SECCOMP_MODE_DEAD;
 	seccomp_log(this_syscall, SIGKILL, SECCOMP_RET_KILL_THREAD, true);
 	do_exit(SIGKILL);
 }
@@ -1218,7 +1198,7 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 		/* Show the handler the original registers. */
 		syscall_rollback(current, current_pt_regs());
 		/* Let the filter pass back 16 bits of data. */
-		seccomp_send_sigsys(this_syscall, data);
+		force_sig_seccomp(this_syscall, data, false);
 		goto skip;
 
 	case SECCOMP_RET_TRACE:
@@ -1285,22 +1265,19 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 	case SECCOMP_RET_KILL_THREAD:
 	case SECCOMP_RET_KILL_PROCESS:
 	default:
+		current->seccomp.mode = SECCOMP_MODE_DEAD;
 		seccomp_log(this_syscall, SIGSYS, action, true);
 		/* Dump core only if this is the last remaining thread. */
 		if (action != SECCOMP_RET_KILL_THREAD ||
-		    get_nr_threads(current) == 1) {
-			kernel_siginfo_t info;
-
+		    (atomic_read(&current->signal->live) == 1)) {
 			/* Show the original registers in the dump. */
 			syscall_rollback(current, current_pt_regs());
-			/* Trigger a manual coredump since do_exit skips it. */
-			seccomp_init_siginfo(&info, this_syscall, data);
-			do_coredump(&info);
-		}
-		if (action == SECCOMP_RET_KILL_THREAD)
+			/* Trigger a coredump with SIGSYS */
+			force_sig_seccomp(this_syscall, data, true);
+		} else {
 			do_exit(SIGSYS);
-		else
-			do_group_exit(SIGSYS);
+		}
+		return -1; /* skip the syscall go directly to signal handling */
 	}
 
 	unreachable();
@@ -1337,6 +1314,11 @@ int __secure_computing(const struct seccomp_data *sd)
 		return 0;
 	case SECCOMP_MODE_FILTER:
 		return __seccomp_filter(this_syscall, sd, false);
+	/* Surviving SECCOMP_RET_KILL_* must be proactively impossible. */
+	case SECCOMP_MODE_DEAD:
+		WARN_ON_ONCE(1);
+		do_exit(SIGKILL);
+		return -1;
 	default:
 		BUG();
 	}

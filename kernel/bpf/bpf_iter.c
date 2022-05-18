@@ -360,6 +360,28 @@ bool bpf_iter_prog_supported(struct bpf_prog *prog)
 	return supported;
 }
 
+const struct bpf_func_proto *
+bpf_iter_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	const struct bpf_iter_target_info *tinfo;
+	const struct bpf_func_proto *fn = NULL;
+
+	mutex_lock(&targets_mutex);
+	list_for_each_entry(tinfo, &targets, list) {
+		if (tinfo->btf_id == prog->aux->attach_btf_id) {
+			const struct bpf_iter_reg *reg_info;
+
+			reg_info = tinfo->reg_info;
+			if (reg_info->get_func_proto)
+				fn = reg_info->get_func_proto(func_id, prog);
+			break;
+		}
+	}
+	mutex_unlock(&targets_mutex);
+
+	return fn;
+}
+
 static void bpf_iter_link_release(struct bpf_link *link)
 {
 	struct bpf_iter_link *iter_link =
@@ -664,7 +686,7 @@ int bpf_iter_run_prog(struct bpf_prog *prog, void *ctx)
 
 	rcu_read_lock();
 	migrate_disable();
-	ret = BPF_PROG_RUN(prog, ctx);
+	ret = bpf_prog_run(prog, ctx);
 	migrate_enable();
 	rcu_read_unlock();
 
@@ -688,6 +710,41 @@ const struct bpf_func_proto bpf_for_each_map_elem_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_CONST_MAP_PTR,
+	.arg2_type	= ARG_PTR_TO_FUNC,
+	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
+	.arg4_type	= ARG_ANYTHING,
+};
+
+/* maximum number of loops */
+#define MAX_LOOPS	BIT(23)
+
+BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
+	   u64, flags)
+{
+	bpf_callback_t callback = (bpf_callback_t)callback_fn;
+	u64 ret;
+	u32 i;
+
+	if (flags)
+		return -EINVAL;
+	if (nr_loops > MAX_LOOPS)
+		return -E2BIG;
+
+	for (i = 0; i < nr_loops; i++) {
+		ret = callback((u64)i, (u64)(long)callback_ctx, 0, 0, 0);
+		/* return value: 0 - continue, 1 - stop and return */
+		if (ret)
+			return i + 1;
+	}
+
+	return i;
+}
+
+const struct bpf_func_proto bpf_loop_proto = {
+	.func		= bpf_loop,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
 	.arg2_type	= ARG_PTR_TO_FUNC,
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,

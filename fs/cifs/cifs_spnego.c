@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1
 /*
- *   fs/cifs/cifs_spnego.c -- SPNEGO upcall management for CIFS
+ *   SPNEGO upcall management for CIFS
  *
  *   Copyright (c) 2007 Red Hat, Inc.
  *   Author(s): Jeff Layton (jlayton@redhat.com)
@@ -84,9 +84,9 @@ struct key_type cifs_spnego_key_type = {
 
 /* get a key struct with a SPNEGO security blob, suitable for session setup */
 struct key *
-cifs_get_spnego_key(struct cifs_ses *sesInfo)
+cifs_get_spnego_key(struct cifs_ses *sesInfo,
+		    struct TCP_Server_Info *server)
 {
-	struct TCP_Server_Info *server = cifs_ses_server(sesInfo);
 	struct sockaddr_in *sa = (struct sockaddr_in *) &server->dstaddr;
 	struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *) &server->dstaddr;
 	char *description, *dp;

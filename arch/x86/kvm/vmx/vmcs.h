@@ -11,6 +11,8 @@
 
 #include "capabilities.h"
 
+#define ROL16(val, n) ((u16)(((u16)(val) << (n)) | ((u16)(val) >> (16 - (n)))))
+
 struct vmcs_hdr {
 	u32 revision_id:31;
 	u32 shadow_vmcs:1;
@@ -125,6 +127,11 @@ static inline bool is_alignment_check(u32 intr_info)
 static inline bool is_machine_check(u32 intr_info)
 {
 	return is_exception_n(intr_info, MC_VECTOR);
+}
+
+static inline bool is_nm_fault(u32 intr_info)
+{
+	return is_exception_n(intr_info, NM_VECTOR);
 }
 
 /* Undocumented: icebp/int1 */

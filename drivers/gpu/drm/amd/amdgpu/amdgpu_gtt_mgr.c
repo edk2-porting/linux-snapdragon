@@ -77,10 +77,8 @@ static ssize_t amdgpu_mem_info_gtt_used_show(struct device *dev,
 {
 	struct drm_device *ddev = dev_get_drvdata(dev);
 	struct amdgpu_device *adev = drm_to_adev(ddev);
-	struct ttm_resource_manager *man;
 
-	man = ttm_manager_type(&adev->mman.bdev, TTM_PL_TT);
-	return sysfs_emit(buf, "%llu\n", amdgpu_gtt_mgr_usage(man));
+	return sysfs_emit(buf, "%llu\n", amdgpu_gtt_mgr_usage(&adev->mman.gtt_mgr));
 }
 
 static DEVICE_ATTR(mem_info_gtt_total, S_IRUGO,
@@ -118,7 +116,7 @@ bool amdgpu_gtt_mgr_has_gart_addr(struct ttm_resource *res)
  * @man: TTM memory type manager
  * @tbo: TTM BO we need this range for
  * @place: placement flags and restrictions
- * @mem: the resulting mem object
+ * @res: the resulting mem object
  *
  * Dummy, allocate the node but no space for it yet.
  */
@@ -132,14 +130,11 @@ static int amdgpu_gtt_mgr_new(struct ttm_resource_manager *man,
 	struct amdgpu_gtt_node *node;
 	int r;
 
-	spin_lock(&mgr->lock);
-	if (tbo->resource && tbo->resource->mem_type != TTM_PL_TT &&
-	    atomic64_read(&mgr->available) < num_pages) {
-		spin_unlock(&mgr->lock);
+	if (!(place->flags & TTM_PL_FLAG_TEMPORARY) &&
+	    atomic64_add_return(num_pages, &mgr->used) >  man->size) {
+		atomic64_sub(num_pages, &mgr->used);
 		return -ENOSPC;
 	}
-	atomic64_sub(num_pages, &mgr->available);
-	spin_unlock(&mgr->lock);
 
 	node = kzalloc(struct_size(node, base.mm_nodes, 1), GFP_KERNEL);
 	if (!node) {
@@ -175,7 +170,8 @@ err_free:
 	kfree(node);
 
 err_out:
-	atomic64_add(num_pages, &mgr->available);
+	if (!(place->flags & TTM_PL_FLAG_TEMPORARY))
+		atomic64_sub(num_pages, &mgr->used);
 
 	return r;
 }
@@ -184,7 +180,7 @@ err_out:
  * amdgpu_gtt_mgr_del - free ranges
  *
  * @man: TTM memory type manager
- * @mem: TTM memory object
+ * @res: TTM memory object
  *
  * Free the allocated GTT again.
  */
@@ -198,7 +194,9 @@ static void amdgpu_gtt_mgr_del(struct ttm_resource_manager *man,
 	if (drm_mm_node_allocated(&node->base.mm_nodes[0]))
 		drm_mm_remove_node(&node->base.mm_nodes[0]);
 	spin_unlock(&mgr->lock);
-	atomic64_add(res->num_pages, &mgr->available);
+
+	if (!(res->placement & TTM_PL_FLAG_TEMPORARY))
+		atomic64_sub(res->num_pages, &mgr->used);
 
 	kfree(node);
 }
@@ -206,31 +204,27 @@ static void amdgpu_gtt_mgr_del(struct ttm_resource_manager *man,
 /**
  * amdgpu_gtt_mgr_usage - return usage of GTT domain
  *
- * @man: TTM memory type manager
+ * @mgr: amdgpu_gtt_mgr pointer
  *
  * Return how many bytes are used in the GTT domain
  */
-uint64_t amdgpu_gtt_mgr_usage(struct ttm_resource_manager *man)
+uint64_t amdgpu_gtt_mgr_usage(struct amdgpu_gtt_mgr *mgr)
 {
-	struct amdgpu_gtt_mgr *mgr = to_gtt_mgr(man);
-	s64 result = man->size - atomic64_read(&mgr->available);
-
-	return (result > 0 ? result : 0) * PAGE_SIZE;
+	return atomic64_read(&mgr->used) * PAGE_SIZE;
 }
 
 /**
  * amdgpu_gtt_mgr_recover - re-init gart
  *
- * @man: TTM memory type manager
+ * @mgr: amdgpu_gtt_mgr pointer
  *
  * Re-init the gart for each known BO in the GTT.
  */
-int amdgpu_gtt_mgr_recover(struct ttm_resource_manager *man)
+int amdgpu_gtt_mgr_recover(struct amdgpu_gtt_mgr *mgr)
 {
-	struct amdgpu_gtt_mgr *mgr = to_gtt_mgr(man);
-	struct amdgpu_device *adev;
 	struct amdgpu_gtt_node *node;
 	struct drm_mm_node *mm_node;
+	struct amdgpu_device *adev;
 	int r = 0;
 
 	adev = container_of(mgr, typeof(*adev), mman.gtt_mgr);
@@ -265,9 +259,8 @@ static void amdgpu_gtt_mgr_debug(struct ttm_resource_manager *man,
 	drm_mm_print(&mgr->mm, printer);
 	spin_unlock(&mgr->lock);
 
-	drm_printf(printer, "man size:%llu pages, gtt available:%lld pages, usage:%lluMB\n",
-		   man->size, (u64)atomic64_read(&mgr->available),
-		   amdgpu_gtt_mgr_usage(man) >> 20);
+	drm_printf(printer, "man size:%llu pages,  gtt used:%llu pages\n",
+		   man->size, atomic64_read(&mgr->used));
 }
 
 static const struct ttm_resource_manager_func amdgpu_gtt_mgr_func = {
@@ -299,7 +292,7 @@ int amdgpu_gtt_mgr_init(struct amdgpu_device *adev, uint64_t gtt_size)
 	size = (adev->gmc.gart_size >> PAGE_SHIFT) - start;
 	drm_mm_init(&mgr->mm, start, size);
 	spin_lock_init(&mgr->lock);
-	atomic64_set(&mgr->available, gtt_size >> PAGE_SHIFT);
+	atomic64_set(&mgr->used, 0);
 
 	ttm_set_driver_manager(&adev->mman.bdev, TTM_PL_TT, &mgr->manager);
 	ttm_resource_manager_set_used(man, true);

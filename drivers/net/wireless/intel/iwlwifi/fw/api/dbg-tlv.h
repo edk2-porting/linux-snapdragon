@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2018-2021 Intel Corporation
+ * Copyright (C) 2018-2022 Intel Corporation
  */
 #ifndef __iwl_fw_dbg_tlv_h__
 #define __iwl_fw_dbg_tlv_h__
@@ -33,12 +33,11 @@ struct iwl_fw_ini_hcmd {
  *
  * @version: TLV version
  * @domain: domain of the TLV. One of &enum iwl_fw_ini_dbg_domain
- * @data: TLV data
  */
 struct iwl_fw_ini_header {
 	__le32 version;
 	__le32 domain;
-	u8 data[];
+	/* followed by the data */
 } __packed; /* FW_TLV_DEBUG_HEADER_S_VER_1 */
 
 /**
@@ -124,12 +123,16 @@ struct iwl_fw_ini_region_internal_buffer {
  * @hdr: debug header
  * @id: region id. Max id is &IWL_FW_INI_MAX_REGION_ID
  * @type: region type. One of &enum iwl_fw_ini_region_type
+ * @sub_type: region sub type
+ * @sub_type_ver: region sub type version
+ * @reserved: not in use
  * @name: region name
  * @dev_addr: device address configuration. Used by
  *	&IWL_FW_INI_REGION_DEVICE_MEMORY, &IWL_FW_INI_REGION_PERIPHERY_MAC,
  *	&IWL_FW_INI_REGION_PERIPHERY_PHY, &IWL_FW_INI_REGION_PERIPHERY_AUX,
  *	&IWL_FW_INI_REGION_PAGING, &IWL_FW_INI_REGION_CSR,
  *	&IWL_FW_INI_REGION_DRAM_IMR and &IWL_FW_INI_REGION_PCI_IOSF_CONFIG
+ *	&IWL_FW_INI_REGION_DBGI_SRAM, &FW_TLV_DEBUG_REGION_TYPE_DBGI_SRAM,
  * @fifos: fifos configuration. Used by &IWL_FW_INI_REGION_TXF and
  *	&IWL_FW_INI_REGION_RXF
  * @err_table: error table configuration. Used by
@@ -145,7 +148,10 @@ struct iwl_fw_ini_region_internal_buffer {
 struct iwl_fw_ini_region_tlv {
 	struct iwl_fw_ini_header hdr;
 	__le32 id;
-	__le32 type;
+	u8 type;
+	u8 sub_type;
+	u8 sub_type_ver;
+	u8 reserved;
 	u8 name[IWL_FW_INI_MAX_NAME];
 	union {
 		struct iwl_fw_ini_region_dev_addr dev_addr;
@@ -243,13 +249,68 @@ struct iwl_fw_ini_hcmd_tlv {
 } __packed; /* FW_TLV_DEBUG_HCMD_API_S_VER_1 */
 
 /**
+* struct iwl_fw_ini_addr_val - Address and value to set it to
+*
+* @address: the base address
+* @value: value to set at address
+*/
+struct iwl_fw_ini_addr_val {
+	__le32 address;
+	__le32 value;
+} __packed; /* FW_TLV_DEBUG_ADDR_VALUE_VER_1 */
+
+/**
+ * struct iwl_fw_ini_conf_tlv - configuration TLV to set register/memory.
+ *
+ * @hdr: debug header
+ * @time_point: time point to apply config. One of &enum iwl_fw_ini_time_point
+ * @set_type: write access type preset token for time point.
+ *  one of &enum iwl_fw_ini_config_set_type
+ * @addr_offset: the offset to add to any item in address[0] field
+ * @addr_val: address value pair
+ */
+struct iwl_fw_ini_conf_set_tlv {
+	struct iwl_fw_ini_header hdr;
+	__le32 time_point;
+	__le32 set_type;
+	__le32 addr_offset;
+	struct iwl_fw_ini_addr_val addr_val[0];
+} __packed; /* FW_TLV_DEBUG_CONFIG_SET_API_S_VER_1 */
+
+/**
+ * enum iwl_fw_ini_config_set_type
+ *
+ * @IWL_FW_INI_CONFIG_SET_TYPE_INVALID: invalid config set
+ * @IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_PERIPHERY_MAC: for PERIPHERY MAC configuration
+ * @IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_PERIPHERY_PHY: for PERIPHERY PHY configuration
+ * @IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_PERIPHERY_AUX: for PERIPHERY AUX configuration
+ * @IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_MEMORY: for DEVICE MEMORY configuration
+ * @IWL_FW_INI_CONFIG_SET_TYPE_CSR: for CSR configuration
+ * @IWL_FW_INI_CONFIG_SET_TYPE_DBGC_DRAM_ADDR: for DBGC_DRAM_ADDR configuration
+ * @IWL_FW_INI_CONFIG_SET_TYPE_PERIPH_SCRATCH_HWM: for PERIPH SCRATCH HWM configuration
+ * @IWL_FW_INI_ALLOCATION_NUM: max number of configuration supported
+*/
+
+enum iwl_fw_ini_config_set_type {
+	IWL_FW_INI_CONFIG_SET_TYPE_INVALID = 0,
+	IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_PERIPHERY_MAC,
+	IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_PERIPHERY_PHY,
+	IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_PERIPHERY_AUX,
+	IWL_FW_INI_CONFIG_SET_TYPE_DEVICE_MEMORY,
+	IWL_FW_INI_CONFIG_SET_TYPE_CSR,
+	IWL_FW_INI_CONFIG_SET_TYPE_DBGC_DRAM_ADDR,
+	IWL_FW_INI_CONFIG_SET_TYPE_PERIPH_SCRATCH_HWM,
+	IWL_FW_INI_CONFIG_SET_TYPE_MAX_NUM,
+} __packed;
+
+/**
  * enum iwl_fw_ini_allocation_id
  *
  * @IWL_FW_INI_ALLOCATION_INVALID: invalid
  * @IWL_FW_INI_ALLOCATION_ID_DBGC1: allocation meant for DBGC1 configuration
  * @IWL_FW_INI_ALLOCATION_ID_DBGC2: allocation meant for DBGC2 configuration
  * @IWL_FW_INI_ALLOCATION_ID_DBGC3: allocation meant for DBGC3 configuration
- * @IWL_FW_INI_ALLOCATION_ID_INTERNAL: allocation meant for Intreanl SMEM in D3
+ * @IWL_FW_INI_ALLOCATION_ID_DBGC4: allocation meant for DBGC4 configuration
  * @IWL_FW_INI_ALLOCATION_NUM: number of allocation ids
 */
 enum iwl_fw_ini_allocation_id {
@@ -257,7 +318,7 @@ enum iwl_fw_ini_allocation_id {
 	IWL_FW_INI_ALLOCATION_ID_DBGC1,
 	IWL_FW_INI_ALLOCATION_ID_DBGC2,
 	IWL_FW_INI_ALLOCATION_ID_DBGC3,
-	IWL_FW_INI_ALLOCATION_ID_INTERNAL,
+	IWL_FW_INI_ALLOCATION_ID_DBGC4,
 	IWL_FW_INI_ALLOCATION_NUM,
 }; /* FW_DEBUG_TLV_ALLOCATION_ID_E_VER_1 */
 
@@ -298,6 +359,7 @@ enum iwl_fw_ini_buffer_location {
  * @IWL_FW_INI_REGION_DRAM_IMR: IMR memory
  * @IWL_FW_INI_REGION_PCI_IOSF_CONFIG: PCI/IOSF config
  * @IWL_FW_INI_REGION_SPECIAL_DEVICE_MEMORY: special device memory
+ * @IWL_FW_INI_REGION_DBGI_SRAM: periphery registers of DBGI SRAM
  * @IWL_FW_INI_REGION_NUM: number of region types
  */
 enum iwl_fw_ini_region_type {
@@ -319,8 +381,20 @@ enum iwl_fw_ini_region_type {
 	IWL_FW_INI_REGION_DRAM_IMR,
 	IWL_FW_INI_REGION_PCI_IOSF_CONFIG,
 	IWL_FW_INI_REGION_SPECIAL_DEVICE_MEMORY,
+	IWL_FW_INI_REGION_DBGI_SRAM,
 	IWL_FW_INI_REGION_NUM
 }; /* FW_TLV_DEBUG_REGION_TYPE_API_E */
+
+enum iwl_fw_ini_region_device_memory_subtype {
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_HW_SMEM = 1,
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_UMAC_ERROR_TABLE = 5,
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_LMAC_1_ERROR_TABLE = 7,
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_LMAC_2_ERROR_TABLE = 10,
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_TCM_1_ERROR_TABLE = 14,
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_TCM_2_ERROR_TABLE = 16,
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_RCM_1_ERROR_TABLE = 18,
+	IWL_FW_INI_REGION_DEVICE_MEMORY_SUBTYPE_RCM_2_ERROR_TABLE = 20,
+}; /* FW_TLV_DEBUG_REGION_DEVICE_MEMORY_SUBTYPE_API_E */
 
 /**
  * enum iwl_fw_ini_time_point
@@ -407,5 +481,18 @@ enum iwl_fw_ini_trigger_apply_policy {
 	IWL_FW_INI_APPLY_POLICY_OVERRIDE_REGIONS	= BIT(8),
 	IWL_FW_INI_APPLY_POLICY_OVERRIDE_CFG		= BIT(9),
 	IWL_FW_INI_APPLY_POLICY_OVERRIDE_DATA		= BIT(10),
+};
+
+/**
+ * enum iwl_fw_ini_trigger_reset_fw_policy - Determines how to handle reset
+ *
+ * @IWL_FW_INI_RESET_FW_MODE_NOTHING: do not stop FW and reload (default)
+ * @IWL_FW_INI_RESET_FW_MODE_STOP_FW_ONLY: stop FW without reload FW
+ * @IWL_FW_INI_RESET_FW_MODE_STOP_AND_RELOAD_FW: stop FW with reload FW
+ */
+enum iwl_fw_ini_trigger_reset_fw_policy {
+	IWL_FW_INI_RESET_FW_MODE_NOTHING = 0,
+	IWL_FW_INI_RESET_FW_MODE_STOP_FW_ONLY,
+	IWL_FW_INI_RESET_FW_MODE_STOP_AND_RELOAD_FW
 };
 #endif

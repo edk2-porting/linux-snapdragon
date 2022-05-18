@@ -442,9 +442,10 @@ static int ping_members(struct dlm_ls *ls)
 	int error = 0;
 
 	list_for_each_entry(memb, &ls->ls_nodes, list) {
-		error = dlm_recovery_stopped(ls);
-		if (error)
+		if (dlm_recovery_stopped(ls)) {
+			error = -EINTR;
 			break;
+		}
 		error = dlm_rcom_status(ls, memb->nodeid, 0);
 		if (error)
 			break;

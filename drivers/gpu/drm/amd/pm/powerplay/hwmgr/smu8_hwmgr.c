@@ -1547,7 +1547,8 @@ static int smu8_print_clock_levels(struct pp_hwmgr *hwmgr,
 	struct smu8_hwmgr *data = hwmgr->backend;
 	struct phm_clock_voltage_dependency_table *sclk_table =
 			hwmgr->dyn_state.vddc_dependency_on_sclk;
-	int i, now, size = 0;
+	uint32_t i, now;
+	int size = 0;
 
 	switch (type) {
 	case PP_SCLK:

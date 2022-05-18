@@ -854,8 +854,8 @@ int amdgpu_acpi_init(struct amdgpu_device *adev)
 		if (amdgpu_device_has_dc_support(adev)) {
 #if defined(CONFIG_DRM_AMD_DC)
 			struct amdgpu_display_manager *dm = &adev->dm;
-			if (dm->backlight_dev)
-				atif->bd = dm->backlight_dev;
+			if (dm->backlight_dev[0])
+				atif->bd = dm->backlight_dev[0];
 #endif
 		} else {
 			struct drm_encoder *tmp;
@@ -1031,20 +1031,47 @@ void amdgpu_acpi_detect(void)
 	}
 }
 
+#if IS_ENABLED(CONFIG_SUSPEND)
 /**
- * amdgpu_acpi_is_s0ix_supported
+ * amdgpu_acpi_is_s3_active
  *
  * @adev: amdgpu_device_pointer
  *
  * returns true if supported, false if not.
  */
-bool amdgpu_acpi_is_s0ix_supported(struct amdgpu_device *adev)
+bool amdgpu_acpi_is_s3_active(struct amdgpu_device *adev)
 {
-#if IS_ENABLED(CONFIG_AMD_PMC) && IS_ENABLED(CONFIG_SUSPEND)
-	if (acpi_gbl_FADT.flags & ACPI_FADT_LOW_POWER_S0) {
-		if (adev->flags & AMD_IS_APU)
-			return pm_suspend_target_state == PM_SUSPEND_TO_IDLE;
-	}
-#endif
-	return false;
+	return !(adev->flags & AMD_IS_APU) ||
+		(pm_suspend_target_state == PM_SUSPEND_MEM);
 }
+
+/**
+ * amdgpu_acpi_is_s0ix_active
+ *
+ * @adev: amdgpu_device_pointer
+ *
+ * returns true if supported, false if not.
+ */
+bool amdgpu_acpi_is_s0ix_active(struct amdgpu_device *adev)
+{
+	if (!(adev->flags & AMD_IS_APU) ||
+	    (pm_suspend_target_state != PM_SUSPEND_TO_IDLE))
+		return false;
+
+	if (!(acpi_gbl_FADT.flags & ACPI_FADT_LOW_POWER_S0)) {
+		dev_warn_once(adev->dev,
+			      "Power consumption will be higher as BIOS has not been configured for suspend-to-idle.\n"
+			      "To use suspend-to-idle change the sleep mode in BIOS setup.\n");
+		return false;
+	}
+
+#if !IS_ENABLED(CONFIG_AMD_PMC)
+	dev_warn_once(adev->dev,
+		      "Power consumption will be higher as the kernel has not been compiled with CONFIG_AMD_PMC.\n");
+	return false;
+#else
+	return true;
+#endif /* CONFIG_AMD_PMC */
+}
+
+#endif /* CONFIG_SUSPEND */

@@ -21,6 +21,7 @@
 #include <linux/power_supply.h>
 #include <linux/property.h>
 #include <linux/thermal.h>
+#include <linux/fixp-arith.h>
 #include "power_supply.h"
 
 /* exported for the APM Power driver, APM emulation */
@@ -563,14 +564,20 @@ EXPORT_SYMBOL_GPL(devm_power_supply_get_by_phandle);
 #endif /* CONFIG_OF */
 
 int power_supply_get_battery_info(struct power_supply *psy,
-				  struct power_supply_battery_info *info)
+				  struct power_supply_battery_info **info_out)
 {
 	struct power_supply_resistance_temp_table *resist_table;
+	struct power_supply_battery_info *info;
 	struct device_node *battery_np;
 	const char *value;
 	int err, len, index;
 	const __be32 *list;
 
+	info = devm_kmalloc(&psy->dev, sizeof(*info), GFP_KERNEL);
+	if (!info)
+		return -ENOMEM;
+
+	info->technology                     = POWER_SUPPLY_TECHNOLOGY_UNKNOWN;
 	info->energy_full_design_uwh         = -EINVAL;
 	info->charge_full_design_uah         = -EINVAL;
 	info->voltage_min_design_uv          = -EINVAL;
@@ -579,6 +586,10 @@ int power_supply_get_battery_info(struct power_supply *psy,
 	info->charge_term_current_ua         = -EINVAL;
 	info->constant_charge_current_max_ua = -EINVAL;
 	info->constant_charge_voltage_max_uv = -EINVAL;
+	info->tricklecharge_current_ua       = -EINVAL;
+	info->precharge_voltage_max_uv       = -EINVAL;
+	info->charge_restart_voltage_uv      = -EINVAL;
+	info->overvoltage_limit_uv           = -EINVAL;
 	info->temp_ambient_alert_min         = INT_MIN;
 	info->temp_ambient_alert_max         = INT_MAX;
 	info->temp_alert_min                 = INT_MIN;
@@ -617,6 +628,24 @@ int power_supply_get_battery_info(struct power_supply *psy,
 	 * in enum power_supply_property. For reasoning, see
 	 * Documentation/power/power_supply_class.rst.
 	 */
+
+	if (!of_property_read_string(battery_np, "device-chemistry", &value)) {
+		if (!strcmp("nickel-cadmium", value))
+			info->technology = POWER_SUPPLY_TECHNOLOGY_NiCd;
+		else if (!strcmp("nickel-metal-hydride", value))
+			info->technology = POWER_SUPPLY_TECHNOLOGY_NiMH;
+		else if (!strcmp("lithium-ion", value))
+			/* Imprecise lithium-ion type */
+			info->technology = POWER_SUPPLY_TECHNOLOGY_LION;
+		else if (!strcmp("lithium-ion-polymer", value))
+			info->technology = POWER_SUPPLY_TECHNOLOGY_LIPO;
+		else if (!strcmp("lithium-ion-iron-phosphate", value))
+			info->technology = POWER_SUPPLY_TECHNOLOGY_LiFe;
+		else if (!strcmp("lithium-ion-manganese-oxide", value))
+			info->technology = POWER_SUPPLY_TECHNOLOGY_LiMn;
+		else
+			dev_warn(&psy->dev, "%s unknown battery type\n", value);
+	}
 
 	of_property_read_u32(battery_np, "energy-full-design-microwatt-hours",
 			     &info->energy_full_design_uwh);
@@ -708,7 +737,7 @@ int power_supply_get_battery_info(struct power_supply *psy,
 
 	list = of_get_property(battery_np, "resistance-temp-table", &len);
 	if (!list || !len)
-		goto out_put_node;
+		goto out_ret_pointer;
 
 	info->resist_table_size = len / (2 * sizeof(__be32));
 	resist_table = info->resist_table = devm_kcalloc(&psy->dev,
@@ -725,6 +754,10 @@ int power_supply_get_battery_info(struct power_supply *psy,
 		resist_table[index].temp = be32_to_cpu(*list++);
 		resist_table[index].resistance = be32_to_cpu(*list++);
 	}
+
+out_ret_pointer:
+	/* Finally return the whole thing */
+	*info_out = info;
 
 out_put_node:
 	of_node_put(battery_np);
@@ -744,6 +777,8 @@ void power_supply_put_battery_info(struct power_supply *psy,
 
 	if (info->resist_table)
 		devm_kfree(&psy->dev, info->resist_table);
+
+	devm_kfree(&psy->dev, info);
 }
 EXPORT_SYMBOL_GPL(power_supply_put_battery_info);
 
@@ -764,26 +799,25 @@ EXPORT_SYMBOL_GPL(power_supply_put_battery_info);
 int power_supply_temp2resist_simple(struct power_supply_resistance_temp_table *table,
 				    int table_len, int temp)
 {
-	int i, resist;
+	int i, high, low;
 
-	for (i = 0; i < table_len; i++)
+	/* Break loop at table_len - 1 because that is the highest index */
+	for (i = 0; i < table_len - 1; i++)
 		if (temp > table[i].temp)
 			break;
 
-	if (i > 0 && i < table_len) {
-		int tmp;
+	/* The library function will deal with high == low */
+	if ((i == 0) || (i == (table_len - 1)))
+		high = i;
+	else
+		high = i - 1;
+	low = i;
 
-		tmp = (table[i - 1].resistance - table[i].resistance) *
-			(temp - table[i].temp);
-		tmp /= table[i - 1].temp - table[i].temp;
-		resist = tmp + table[i].resistance;
-	} else if (i == 0) {
-		resist = table[0].resistance;
-	} else {
-		resist = table[table_len - 1].resistance;
-	}
-
-	return resist;
+	return fixp_linear_interpolate(table[low].temp,
+				       table[low].resistance,
+				       table[high].temp,
+				       table[high].resistance,
+				       temp);
 }
 EXPORT_SYMBOL_GPL(power_supply_temp2resist_simple);
 
@@ -802,24 +836,25 @@ EXPORT_SYMBOL_GPL(power_supply_temp2resist_simple);
 int power_supply_ocv2cap_simple(struct power_supply_battery_ocv_table *table,
 				int table_len, int ocv)
 {
-	int i, cap, tmp;
+	int i, high, low;
 
-	for (i = 0; i < table_len; i++)
+	/* Break loop at table_len - 1 because that is the highest index */
+	for (i = 0; i < table_len - 1; i++)
 		if (ocv > table[i].ocv)
 			break;
 
-	if (i > 0 && i < table_len) {
-		tmp = (table[i - 1].capacity - table[i].capacity) *
-			(ocv - table[i].ocv);
-		tmp /= table[i - 1].ocv - table[i].ocv;
-		cap = tmp + table[i].capacity;
-	} else if (i == 0) {
-		cap = table[0].capacity;
-	} else {
-		cap = table[table_len - 1].capacity;
-	}
+	/* The library function will deal with high == low */
+	if ((i == 0) || (i == (table_len - 1)))
+		high = i - 1;
+	else
+		high = i; /* i.e. i == 0 */
+	low = i;
 
-	return cap;
+	return fixp_linear_interpolate(table[low].ocv,
+				       table[low].capacity,
+				       table[high].ocv,
+				       table[high].capacity,
+				       ocv);
 }
 EXPORT_SYMBOL_GPL(power_supply_ocv2cap_simple);
 
@@ -834,6 +869,10 @@ power_supply_find_ocv2cap_table(struct power_supply_battery_info *info,
 		return NULL;
 
 	for (i = 0; i < POWER_SUPPLY_OCV_TEMP_MAX; i++) {
+		/* Out of capacity tables */
+		if (!info->ocv_table[i])
+			break;
+
 		temp_diff = abs(info->ocv_temp[i] - temp);
 
 		if (temp_diff < best_temp_diff) {
@@ -932,6 +971,22 @@ void power_supply_unreg_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(power_supply_unreg_notifier);
 
+static bool psy_has_property(const struct power_supply_desc *psy_desc,
+			     enum power_supply_property psp)
+{
+	bool found = false;
+	int i;
+
+	for (i = 0; i < psy_desc->num_properties; i++) {
+		if (psy_desc->properties[i] == psp) {
+			found = true;
+			break;
+		}
+	}
+
+	return found;
+}
+
 #ifdef CONFIG_THERMAL
 static int power_supply_read_temp(struct thermal_zone_device *tzd,
 		int *temp)
@@ -958,24 +1013,23 @@ static struct thermal_zone_device_ops psy_tzd_ops = {
 
 static int psy_register_thermal(struct power_supply *psy)
 {
-	int i, ret;
+	int ret;
 
 	if (psy->desc->no_thermal)
 		return 0;
 
 	/* Register battery zone device psy reports temperature */
-	for (i = 0; i < psy->desc->num_properties; i++) {
-		if (psy->desc->properties[i] == POWER_SUPPLY_PROP_TEMP) {
-			psy->tzd = thermal_zone_device_register(psy->desc->name,
-					0, 0, psy, &psy_tzd_ops, NULL, 0, 0);
-			if (IS_ERR(psy->tzd))
-				return PTR_ERR(psy->tzd);
-			ret = thermal_zone_device_enable(psy->tzd);
-			if (ret)
-				thermal_zone_device_unregister(psy->tzd);
-			return ret;
-		}
+	if (psy_has_property(psy->desc, POWER_SUPPLY_PROP_TEMP)) {
+		psy->tzd = thermal_zone_device_register(psy->desc->name,
+				0, 0, psy, &psy_tzd_ops, NULL, 0, 0);
+		if (IS_ERR(psy->tzd))
+			return PTR_ERR(psy->tzd);
+		ret = thermal_zone_device_enable(psy->tzd);
+		if (ret)
+			thermal_zone_device_unregister(psy->tzd);
+		return ret;
 	}
+
 	return 0;
 }
 
@@ -1046,18 +1100,14 @@ static const struct thermal_cooling_device_ops psy_tcd_ops = {
 
 static int psy_register_cooler(struct power_supply *psy)
 {
-	int i;
-
 	/* Register for cooling device if psy can control charging */
-	for (i = 0; i < psy->desc->num_properties; i++) {
-		if (psy->desc->properties[i] ==
-				POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT) {
-			psy->tcd = thermal_cooling_device_register(
-							(char *)psy->desc->name,
-							psy, &psy_tcd_ops);
-			return PTR_ERR_OR_ZERO(psy->tcd);
-		}
+	if (psy_has_property(psy->desc, POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT)) {
+		psy->tcd = thermal_cooling_device_register(
+			(char *)psy->desc->name,
+			psy, &psy_tcd_ops);
+		return PTR_ERR_OR_ZERO(psy->tcd);
 	}
+
 	return 0;
 }
 
@@ -1095,7 +1145,7 @@ __power_supply_register(struct device *parent,
 {
 	struct device *dev;
 	struct power_supply *psy;
-	int i, rc;
+	int rc;
 
 	if (!parent)
 		pr_warn("%s: Expected proper parent device for '%s'\n",
@@ -1104,11 +1154,9 @@ __power_supply_register(struct device *parent,
 	if (!desc || !desc->name || !desc->properties || !desc->num_properties)
 		return ERR_PTR(-EINVAL);
 
-	for (i = 0; i < desc->num_properties; ++i) {
-		if ((desc->properties[i] == POWER_SUPPLY_PROP_USB_TYPE) &&
-		    (!desc->usb_types || !desc->num_usb_types))
-			return ERR_PTR(-EINVAL);
-	}
+	if (psy_has_property(desc, POWER_SUPPLY_PROP_USB_TYPE) &&
+	    (!desc->usb_types || !desc->num_usb_types))
+		return ERR_PTR(-EINVAL);
 
 	psy = kzalloc(sizeof(*psy), GFP_KERNEL);
 	if (!psy)

@@ -302,7 +302,7 @@ int smack_populate_secattr(struct smack_known *skp);
 /*
  * Shared data.
  */
-extern int smack_enabled;
+extern int smack_enabled __initdata;
 extern int smack_cipso_direct;
 extern int smack_cipso_mapped;
 extern struct smack_known *smack_net_ambient;
@@ -387,22 +387,6 @@ static inline struct smack_known *smk_of_inode(const struct inode *isp)
 static inline struct smack_known *smk_of_task(const struct task_smack *tsp)
 {
 	return tsp->smk_task;
-}
-
-static inline struct smack_known *smk_of_task_struct_subj(
-						const struct task_struct *t)
-{
-	struct smack_known *skp;
-	const struct cred *cred;
-
-	rcu_read_lock();
-
-	cred = rcu_dereference(t->cred);
-	skp = smk_of_task(smack_cred(cred));
-
-	rcu_read_unlock();
-
-	return skp;
 }
 
 static inline struct smack_known *smk_of_task_struct_obj(

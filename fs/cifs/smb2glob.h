@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1 */
 /*
- *   fs/cifs/smb2glob.h
  *
  *   Definitions for various global variables and structures
  *
@@ -13,8 +12,6 @@
  */
 #ifndef _SMB2_GLOB_H
 #define _SMB2_GLOB_H
-
-#define SMB2_MAGIC_NUMBER 0xFE534D42
 
 /*
  *****************************************************************

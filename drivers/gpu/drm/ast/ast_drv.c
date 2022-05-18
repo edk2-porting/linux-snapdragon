@@ -26,7 +26,6 @@
  * Authors: Dave Airlie <airlied@redhat.com>
  */
 
-#include <linux/console.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 
@@ -100,7 +99,7 @@ static int ast_remove_conflicting_framebuffers(struct pci_dev *pdev)
 	primary = pdev->resource[PCI_ROM_RESOURCE].flags & IORESOURCE_ROM_SHADOW;
 #endif
 
-	return drm_aperture_remove_conflicting_framebuffers(base, size, primary, "astdrmfb");
+	return drm_aperture_remove_conflicting_framebuffers(base, size, primary, &ast_driver);
 }
 
 static int ast_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
@@ -233,7 +232,7 @@ static struct pci_driver ast_pci_driver = {
 
 static int __init ast_init(void)
 {
-	if (vgacon_text_force() && ast_modeset == -1)
+	if (drm_firmware_drivers_only() && ast_modeset == -1)
 		return -EINVAL;
 
 	if (ast_modeset == 0)

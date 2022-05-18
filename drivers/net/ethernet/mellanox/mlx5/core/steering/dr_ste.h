@@ -135,18 +135,20 @@ struct mlx5dr_ste_ctx {
 	void DR_STE_CTX_BUILDER(tnl_vxlan_gpe);
 	void DR_STE_CTX_BUILDER(tnl_geneve);
 	void DR_STE_CTX_BUILDER(tnl_geneve_tlv_opt);
+	void DR_STE_CTX_BUILDER(tnl_geneve_tlv_opt_exist);
 	void DR_STE_CTX_BUILDER(register_0);
 	void DR_STE_CTX_BUILDER(register_1);
 	void DR_STE_CTX_BUILDER(src_gvmi_qpn);
 	void DR_STE_CTX_BUILDER(flex_parser_0);
 	void DR_STE_CTX_BUILDER(flex_parser_1);
 	void DR_STE_CTX_BUILDER(tnl_gtpu);
+	void DR_STE_CTX_BUILDER(tnl_header_0_1);
 	void DR_STE_CTX_BUILDER(tnl_gtpu_flex_parser_0);
 	void DR_STE_CTX_BUILDER(tnl_gtpu_flex_parser_1);
 
 	/* Getters and Setters */
 	void (*ste_init)(u8 *hw_ste_p, u16 lu_type,
-			 u8 entry_type, u16 gvmi);
+			 bool is_rx, u16 gvmi);
 	void (*set_next_lu_type)(u8 *hw_ste_p, u16 lu_type);
 	u16  (*get_next_lu_type)(u8 *hw_ste_p);
 	void (*set_miss_addr)(u8 *hw_ste_p, u64 miss_addr);

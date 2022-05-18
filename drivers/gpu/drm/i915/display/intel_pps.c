@@ -9,6 +9,7 @@
 #include "intel_display_types.h"
 #include "intel_dp.h"
 #include "intel_dpll.h"
+#include "intel_lvds.h"
 #include "intel_pps.h"
 
 static void vlv_steal_power_sequencer(struct drm_i915_private *dev_priv,
@@ -1074,14 +1075,14 @@ static void intel_pps_vdd_sanitize(struct intel_dp *intel_dp)
 	edp_panel_vdd_schedule_off(intel_dp);
 }
 
-bool intel_pps_have_power(struct intel_dp *intel_dp)
+bool intel_pps_have_panel_power_or_vdd(struct intel_dp *intel_dp)
 {
 	intel_wakeref_t wakeref;
 	bool have_power = false;
 
 	with_intel_pps_lock(intel_dp, wakeref) {
-		have_power = edp_have_panel_power(intel_dp) &&
-						  edp_have_panel_vdd(intel_dp);
+		have_power = edp_have_panel_power(intel_dp) ||
+			     edp_have_panel_vdd(intel_dp);
 	}
 
 	return have_power;
@@ -1407,4 +1408,62 @@ void intel_pps_setup(struct drm_i915_private *i915)
 		i915->pps_mmio_base = VLV_PPS_BASE;
 	else
 		i915->pps_mmio_base = PPS_BASE;
+}
+
+void assert_pps_unlocked(struct drm_i915_private *dev_priv, enum pipe pipe)
+{
+	i915_reg_t pp_reg;
+	u32 val;
+	enum pipe panel_pipe = INVALID_PIPE;
+	bool locked = true;
+
+	if (drm_WARN_ON(&dev_priv->drm, HAS_DDI(dev_priv)))
+		return;
+
+	if (HAS_PCH_SPLIT(dev_priv)) {
+		u32 port_sel;
+
+		pp_reg = PP_CONTROL(0);
+		port_sel = intel_de_read(dev_priv, PP_ON_DELAYS(0)) & PANEL_PORT_SELECT_MASK;
+
+		switch (port_sel) {
+		case PANEL_PORT_SELECT_LVDS:
+			intel_lvds_port_enabled(dev_priv, PCH_LVDS, &panel_pipe);
+			break;
+		case PANEL_PORT_SELECT_DPA:
+			g4x_dp_port_enabled(dev_priv, DP_A, PORT_A, &panel_pipe);
+			break;
+		case PANEL_PORT_SELECT_DPC:
+			g4x_dp_port_enabled(dev_priv, PCH_DP_C, PORT_C, &panel_pipe);
+			break;
+		case PANEL_PORT_SELECT_DPD:
+			g4x_dp_port_enabled(dev_priv, PCH_DP_D, PORT_D, &panel_pipe);
+			break;
+		default:
+			MISSING_CASE(port_sel);
+			break;
+		}
+	} else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) {
+		/* presumably write lock depends on pipe, not port select */
+		pp_reg = PP_CONTROL(pipe);
+		panel_pipe = pipe;
+	} else {
+		u32 port_sel;
+
+		pp_reg = PP_CONTROL(0);
+		port_sel = intel_de_read(dev_priv, PP_ON_DELAYS(0)) & PANEL_PORT_SELECT_MASK;
+
+		drm_WARN_ON(&dev_priv->drm,
+			    port_sel != PANEL_PORT_SELECT_LVDS);
+		intel_lvds_port_enabled(dev_priv, LVDS, &panel_pipe);
+	}
+
+	val = intel_de_read(dev_priv, pp_reg);
+	if (!(val & PANEL_POWER_ON) ||
+	    ((val & PANEL_UNLOCK_MASK) == PANEL_UNLOCK_REGS))
+		locked = false;
+
+	I915_STATE_WARN(panel_pipe == pipe && locked,
+			"panel assertion failure, pipe %c regs locked\n",
+			pipe_name(pipe));
 }

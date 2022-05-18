@@ -531,6 +531,8 @@ static struct kfd_event_waiter *alloc_event_waiters(uint32_t num_events)
 	event_waiters = kmalloc_array(num_events,
 					sizeof(struct kfd_event_waiter),
 					GFP_KERNEL);
+	if (!event_waiters)
+		return NULL;
 
 	for (i = 0; (event_waiters) && (i < num_events) ; i++) {
 		init_wait(&event_waiters[i].wait);
@@ -935,8 +937,10 @@ void kfd_signal_iommu_event(struct kfd_dev *dev, u32 pasid,
 	/* Workaround on Raven to not kill the process when memory is freed
 	 * before IOMMU is able to finish processing all the excessive PPRs
 	 */
-	if (dev->device_info->asic_family != CHIP_RAVEN &&
-	    dev->device_info->asic_family != CHIP_RENOIR) {
+
+	if (KFD_GC_VERSION(dev) != IP_VERSION(9, 1, 0) &&
+	    KFD_GC_VERSION(dev) != IP_VERSION(9, 2, 2) &&
+	    KFD_GC_VERSION(dev) != IP_VERSION(9, 3, 0)) {
 		mutex_lock(&p->event_mutex);
 
 		/* Lookup events by type and signal them */

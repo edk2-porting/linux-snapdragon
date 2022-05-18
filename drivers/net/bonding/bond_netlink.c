@@ -100,6 +100,7 @@ static const struct nla_policy bond_policy[IFLA_BOND_MAX + 1] = {
 	[IFLA_BOND_MIN_LINKS]		= { .type = NLA_U32 },
 	[IFLA_BOND_LP_INTERVAL]		= { .type = NLA_U32 },
 	[IFLA_BOND_PACKETS_PER_SLAVE]	= { .type = NLA_U32 },
+	[IFLA_BOND_AD_LACP_ACTIVE]	= { .type = NLA_U8 },
 	[IFLA_BOND_AD_LACP_RATE]	= { .type = NLA_U8 },
 	[IFLA_BOND_AD_SELECT]		= { .type = NLA_U8 },
 	[IFLA_BOND_AD_INFO]		= { .type = NLA_NESTED },
@@ -109,6 +110,7 @@ static const struct nla_policy bond_policy[IFLA_BOND_MAX + 1] = {
 					    .len  = ETH_ALEN },
 	[IFLA_BOND_TLB_DYNAMIC_LB]	= { .type = NLA_U8 },
 	[IFLA_BOND_PEER_NOTIF_DELAY]    = { .type = NLA_U32 },
+	[IFLA_BOND_MISSED_MAX]		= { .type = NLA_U8 },
 };
 
 static const struct nla_policy bond_slave_policy[IFLA_BOND_SLAVE_MAX + 1] = {
@@ -387,6 +389,16 @@ static int bond_changelink(struct net_device *bond_dev, struct nlattr *tb[],
 		if (err)
 			return err;
 	}
+
+	if (data[IFLA_BOND_AD_LACP_ACTIVE]) {
+		int lacp_active = nla_get_u8(data[IFLA_BOND_AD_LACP_ACTIVE]);
+
+		bond_opt_initval(&newval, lacp_active);
+		err = __bond_opt_set(bond, BOND_OPT_LACP_ACTIVE, &newval);
+		if (err)
+			return err;
+	}
+
 	if (data[IFLA_BOND_AD_LACP_RATE]) {
 		int lacp_rate =
 			nla_get_u8(data[IFLA_BOND_AD_LACP_RATE]);
@@ -442,6 +454,15 @@ static int bond_changelink(struct net_device *bond_dev, struct nlattr *tb[],
 			return err;
 	}
 
+	if (data[IFLA_BOND_MISSED_MAX]) {
+		int missed_max = nla_get_u8(data[IFLA_BOND_MISSED_MAX]);
+
+		bond_opt_initval(&newval, missed_max);
+		err = __bond_opt_set(bond, BOND_OPT_MISSED_MAX, &newval);
+		if (err)
+			return err;
+	}
+
 	return 0;
 }
 
@@ -490,6 +511,7 @@ static size_t bond_get_size(const struct net_device *bond_dev)
 		nla_total_size(sizeof(u32)) +	/* IFLA_BOND_MIN_LINKS */
 		nla_total_size(sizeof(u32)) +	/* IFLA_BOND_LP_INTERVAL */
 		nla_total_size(sizeof(u32)) +  /* IFLA_BOND_PACKETS_PER_SLAVE */
+		nla_total_size(sizeof(u8)) +	/* IFLA_BOND_AD_LACP_ACTIVE */
 		nla_total_size(sizeof(u8)) +	/* IFLA_BOND_AD_LACP_RATE */
 		nla_total_size(sizeof(u8)) +	/* IFLA_BOND_AD_SELECT */
 		nla_total_size(sizeof(struct nlattr)) + /* IFLA_BOND_AD_INFO */
@@ -503,6 +525,7 @@ static size_t bond_get_size(const struct net_device *bond_dev)
 		nla_total_size(ETH_ALEN) + /* IFLA_BOND_AD_ACTOR_SYSTEM */
 		nla_total_size(sizeof(u8)) + /* IFLA_BOND_TLB_DYNAMIC_LB */
 		nla_total_size(sizeof(u32)) +	/* IFLA_BOND_PEER_NOTIF_DELAY */
+		nla_total_size(sizeof(u8)) +	/* IFLA_BOND_MISSED_MAX */
 		0;
 }
 
@@ -622,6 +645,10 @@ static int bond_fill_info(struct sk_buff *skb,
 			packets_per_slave))
 		goto nla_put_failure;
 
+	if (nla_put_u8(skb, IFLA_BOND_AD_LACP_ACTIVE,
+		       bond->params.lacp_active))
+		goto nla_put_failure;
+
 	if (nla_put_u8(skb, IFLA_BOND_AD_LACP_RATE,
 		       bond->params.lacp_fast))
 		goto nla_put_failure;
@@ -632,6 +659,10 @@ static int bond_fill_info(struct sk_buff *skb,
 
 	if (nla_put_u8(skb, IFLA_BOND_TLB_DYNAMIC_LB,
 		       bond->params.tlb_dynamic_lb))
+		goto nla_put_failure;
+
+	if (nla_put_u8(skb, IFLA_BOND_MISSED_MAX,
+		       bond->params.missed_max))
 		goto nla_put_failure;
 
 	if (BOND_MODE(bond) == BOND_MODE_8023AD) {

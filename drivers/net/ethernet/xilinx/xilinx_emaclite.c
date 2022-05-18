@@ -206,12 +206,13 @@ static void xemaclite_disable_interrupts(struct net_local *drvdata)
  * This function writes data from a 16-bit aligned buffer to a 32-bit aligned
  * address in the EmacLite device.
  */
-static void xemaclite_aligned_write(void *src_ptr, u32 *dest_ptr,
+static void xemaclite_aligned_write(const void *src_ptr, u32 *dest_ptr,
 				    unsigned length)
 {
+	const u16 *from_u16_ptr;
 	u32 align_buffer;
 	u32 *to_u32_ptr;
-	u16 *from_u16_ptr, *to_u16_ptr;
+	u16 *to_u16_ptr;
 
 	to_u32_ptr = dest_ptr;
 	from_u16_ptr = src_ptr;
@@ -470,7 +471,7 @@ static u16 xemaclite_recv_data(struct net_local *drvdata, u8 *data, int maxlen)
  * buffers (if configured).
  */
 static void xemaclite_update_address(struct net_local *drvdata,
-				     u8 *address_ptr)
+				     const u8 *address_ptr)
 {
 	void __iomem *addr;
 	u32 reg_data;
@@ -511,7 +512,7 @@ static int xemaclite_set_mac_address(struct net_device *dev, void *address)
 	if (netif_running(dev))
 		return -EBUSY;
 
-	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	eth_hw_addr_set(dev, addr->sa_data);
 	xemaclite_update_address(lp, dev->dev_addr);
 	return 0;
 }
@@ -822,10 +823,10 @@ static int xemaclite_mdio_write(struct mii_bus *bus, int phy_id, int reg,
 static int xemaclite_mdio_setup(struct net_local *lp, struct device *dev)
 {
 	struct mii_bus *bus;
-	int rc;
 	struct resource res;
 	struct device_node *np = of_get_parent(lp->phy_node);
 	struct device_node *npp;
+	int rc, ret;
 
 	/* Don't register the MDIO bus if the phy_node or its parent node
 	 * can't be found.
@@ -835,8 +836,14 @@ static int xemaclite_mdio_setup(struct net_local *lp, struct device *dev)
 		return -ENODEV;
 	}
 	npp = of_get_parent(np);
-
-	of_address_to_resource(npp, 0, &res);
+	ret = of_address_to_resource(npp, 0, &res);
+	of_node_put(npp);
+	if (ret) {
+		dev_err(dev, "%s resource error!\n",
+			dev->of_node->full_name);
+		of_node_put(np);
+		return ret;
+	}
 	if (lp->ndev->mem_start != res.start) {
 		struct phy_device *phydev;
 		phydev = of_phy_find_device(lp->phy_node);
@@ -845,6 +852,7 @@ static int xemaclite_mdio_setup(struct net_local *lp, struct device *dev)
 				 "MDIO of the phy is not registered yet\n");
 		else
 			put_device(&phydev->mdio.dev);
+		of_node_put(np);
 		return 0;
 	}
 
@@ -857,6 +865,7 @@ static int xemaclite_mdio_setup(struct net_local *lp, struct device *dev)
 	bus = mdiobus_alloc();
 	if (!bus) {
 		dev_err(dev, "Failed to allocate mdiobus\n");
+		of_node_put(np);
 		return -ENOMEM;
 	}
 
@@ -869,6 +878,7 @@ static int xemaclite_mdio_setup(struct net_local *lp, struct device *dev)
 	bus->parent = dev;
 
 	rc = of_mdiobus_register(bus, np);
+	of_node_put(np);
 	if (rc) {
 		dev_err(dev, "Failed to register mdio bus.\n");
 		goto err_register;
@@ -1132,14 +1142,11 @@ static int xemaclite_of_probe(struct platform_device *ofdev)
 	lp->ndev = ndev;
 
 	/* Get IRQ for the device */
-	res = platform_get_resource(ofdev, IORESOURCE_IRQ, 0);
-	if (!res) {
-		dev_err(dev, "no IRQ found\n");
-		rc = -ENXIO;
+	rc = platform_get_irq(ofdev, 0);
+	if (rc < 0)
 		goto error;
-	}
 
-	ndev->irq = res->start;
+	ndev->irq = rc;
 
 	res = platform_get_resource(ofdev, IORESOURCE_MEM, 0);
 	lp->base_addr = devm_ioremap_resource(&ofdev->dev, res);
@@ -1157,7 +1164,7 @@ static int xemaclite_of_probe(struct platform_device *ofdev)
 	lp->tx_ping_pong = get_bool(ofdev, "xlnx,tx-ping-pong");
 	lp->rx_ping_pong = get_bool(ofdev, "xlnx,rx-ping-pong");
 
-	rc = of_get_mac_address(ofdev->dev.of_node, ndev->dev_addr);
+	rc = of_get_ethdev_address(ofdev->dev.of_node, ndev);
 	if (rc) {
 		dev_warn(dev, "No MAC address found, using random\n");
 		eth_hw_addr_random(ndev);
@@ -1185,7 +1192,7 @@ static int xemaclite_of_probe(struct platform_device *ofdev)
 	if (rc) {
 		dev_err(dev,
 			"Cannot register network device, aborting\n");
-		goto error;
+		goto put_node;
 	}
 
 	dev_info(dev,
@@ -1193,6 +1200,8 @@ static int xemaclite_of_probe(struct platform_device *ofdev)
 		 (unsigned long __force)ndev->mem_start, lp->base_addr, ndev->irq);
 	return 0;
 
+put_node:
+	of_node_put(lp->phy_node);
 error:
 	free_netdev(ndev);
 	return rc;
@@ -1263,7 +1272,7 @@ static const struct net_device_ops xemaclite_netdev_ops = {
 	.ndo_start_xmit		= xemaclite_send,
 	.ndo_set_mac_address	= xemaclite_set_mac_address,
 	.ndo_tx_timeout		= xemaclite_tx_timeout,
-	.ndo_do_ioctl		= xemaclite_ioctl,
+	.ndo_eth_ioctl		= xemaclite_ioctl,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = xemaclite_poll_controller,
 #endif

@@ -7,6 +7,9 @@
 #define PCI_DEVICE_ID_INTEL_DSA_SPR0	0x0b25
 #define PCI_DEVICE_ID_INTEL_IAX_SPR0	0x0cfe
 
+#define DEVICE_VERSION_1		0x100
+#define DEVICE_VERSION_2		0x200
+
 #define IDXD_MMIO_BAR		0
 #define IDXD_WQ_BAR		2
 #define IDXD_PORTAL_SIZE	PAGE_SIZE
@@ -33,8 +36,7 @@ union gen_cap_reg {
 		u64 max_batch_shift:4;
 		u64 max_ims_mult:6;
 		u64 config_en:1;
-		u64 max_descs_per_engine:8;
-		u64 rsvd3:24;
+		u64 rsvd3:32;
 	};
 	u64 bits;
 } __packed;
@@ -62,9 +64,9 @@ union wq_cap_reg {
 union group_cap_reg {
 	struct {
 		u64 num_groups:8;
-		u64 total_tokens:8;
-		u64 token_en:1;
-		u64 token_limit:1;
+		u64 total_rdbufs:8;	/* formerly total_tokens */
+		u64 rdbuf_ctrl:1;	/* formerly token_en */
+		u64 rdbuf_limit:1;	/* formerly token_limit */
 		u64 rsvd:46;
 	};
 	u64 bits;
@@ -108,7 +110,7 @@ union offsets_reg {
 #define IDXD_GENCFG_OFFSET		0x80
 union gencfg_reg {
 	struct {
-		u32 token_limit:8;
+		u32 rdbuf_limit:8;
 		u32 rsvd:4;
 		u32 user_int_en:1;
 		u32 rsvd2:19;
@@ -155,6 +157,8 @@ enum idxd_device_reset_type {
 #define IDXD_INTC_CMD			0x02
 #define IDXD_INTC_OCCUPY			0x04
 #define IDXD_INTC_PERFMON_OVFL		0x08
+#define IDXD_INTC_HALT_STATE		0x10
+#define IDXD_INTC_INT_HANDLE_REVOKED	0x80000000
 
 #define IDXD_CMD_OFFSET			0xa0
 union idxd_command_reg {
@@ -284,10 +288,10 @@ union group_flags {
 		u32 tc_a:3;
 		u32 tc_b:3;
 		u32 rsvd:1;
-		u32 use_token_limit:1;
-		u32 tokens_reserved:8;
+		u32 use_rdbuf_limit:1;
+		u32 rdbufs_reserved:8;
 		u32 rsvd2:4;
-		u32 tokens_allowed:8;
+		u32 rdbufs_allowed:8;
 		u32 rsvd3:4;
 	};
 	u32 bits;
@@ -349,6 +353,9 @@ union wqcfg {
 } __packed;
 
 #define WQCFG_PASID_IDX                2
+#define WQCFG_OCCUP_IDX		6
+
+#define WQCFG_OCCUP_MASK	0xffff
 
 /*
  * This macro calculates the offset into the WQCFG register

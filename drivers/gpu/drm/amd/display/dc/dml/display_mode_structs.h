@@ -536,6 +536,8 @@ struct _vcs_dpi_display_rq_regs_st {
 	unsigned int mrq_expansion_mode;
 	unsigned int crq_expansion_mode;
 	unsigned int plane1_base_address;
+	unsigned int aperture_low_addr;   // bits [47:18]
+	unsigned int aperture_high_addr;  // bits [47:18]
 };
 
 struct _vcs_dpi_display_dlg_sys_params_st {
@@ -544,7 +546,6 @@ struct _vcs_dpi_display_dlg_sys_params_st {
 	double t_sr_wm_us;
 	double t_extra_us;
 	double mem_trip_us;
-	double t_srx_delay_us;
 	double deepsleep_dcfclk_mhz;
 	double total_flip_bw;
 	unsigned int total_flip_bytes;

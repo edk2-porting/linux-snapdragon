@@ -307,37 +307,28 @@ static void geni_se_select_dma_mode(struct geni_se *se)
 		writel_relaxed(val, se->base + SE_GENI_DMA_MODE_EN);
 }
 
-static int geni_se_select_gpi_mode(struct geni_se *se)
+static void geni_se_select_gpi_mode(struct geni_se *se)
 {
-	unsigned int geni_dma_mode = 0;
-	unsigned int gpi_event_en = 0;
-	unsigned int common_geni_m_irq_en = 0;
-	unsigned int common_geni_s_irq_en = 0;
+	u32 val;
 
-	common_geni_m_irq_en = readl_relaxed(se->base + SE_GENI_M_IRQ_EN);
-	common_geni_s_irq_en = readl_relaxed(se->base + SE_GENI_S_IRQ_EN);
-	common_geni_m_irq_en &=
-			~(M_CMD_DONE_EN | M_TX_FIFO_WATERMARK_EN |
-			M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN);
-	common_geni_s_irq_en &= ~S_CMD_DONE_EN;
-	geni_dma_mode = readl_relaxed(se->base + SE_GENI_DMA_MODE_EN);
-	gpi_event_en = readl_relaxed(se->base + SE_GSI_EVENT_EN);
+	geni_se_irq_clear(se);
 
-	geni_dma_mode |= GENI_DMA_MODE_EN;
-	gpi_event_en |= (DMA_RX_EVENT_EN | DMA_TX_EVENT_EN |
-				GENI_M_EVENT_EN | GENI_S_EVENT_EN);
+	writel(0, se->base + SE_IRQ_EN);
 
-	writel_relaxed(0, se->base + SE_IRQ_EN);
-	writel_relaxed(common_geni_s_irq_en, se->base + SE_GENI_S_IRQ_EN);
-	writel_relaxed(common_geni_m_irq_en, se->base + SE_GENI_M_IRQ_EN);
-	writel_relaxed(0xFFFFFFFF, se->base + SE_GENI_M_IRQ_CLEAR);
-	writel_relaxed(0xFFFFFFFF, se->base + SE_GENI_S_IRQ_CLEAR);
-	writel_relaxed(0xFFFFFFFF, se->base + SE_DMA_TX_IRQ_CLR);
-	writel_relaxed(0xFFFFFFFF, se->base + SE_DMA_RX_IRQ_CLR);
-	writel_relaxed(geni_dma_mode, se->base + SE_GENI_DMA_MODE_EN);
-	writel_relaxed(gpi_event_en, se->base + SE_GSI_EVENT_EN);
+	val = readl(se->base + SE_GENI_S_IRQ_EN);
+	val &= ~S_CMD_DONE_EN;
+	writel(val, se->base + SE_GENI_S_IRQ_EN);
 
-	return 0;
+	val = readl(se->base + SE_GENI_M_IRQ_EN);
+	val &= ~(M_CMD_DONE_EN | M_TX_FIFO_WATERMARK_EN |
+		 M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN);
+	writel(val, se->base + SE_GENI_M_IRQ_EN);
+
+	writel(GENI_DMA_MODE_EN, se->base + SE_GENI_DMA_MODE_EN);
+
+	val = readl(se->base + SE_GSI_EVENT_EN);
+	val |= (DMA_RX_EVENT_EN | DMA_TX_EVENT_EN | GENI_M_EVENT_EN | GENI_S_EVENT_EN);
+	writel(val, se->base + SE_GSI_EVENT_EN);
 }
 
 /**
@@ -347,8 +338,7 @@ static int geni_se_select_gpi_mode(struct geni_se *se)
  */
 void geni_se_select_mode(struct geni_se *se, enum geni_se_xfer_mode mode)
 {
-	WARN_ON(mode != GENI_SE_FIFO && mode != GENI_SE_DMA &&
-		mode != GENI_GPI_DMA);
+	WARN_ON(mode != GENI_SE_FIFO && mode != GENI_SE_DMA && mode != GENI_GPI_DMA);
 
 	switch (mode) {
 	case GENI_SE_FIFO:
@@ -867,7 +857,6 @@ EXPORT_SYMBOL(geni_icc_disable);
 static int geni_se_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct resource *res;
 	struct geni_wrapper *wrapper;
 	int ret;
 
@@ -876,8 +865,7 @@ static int geni_se_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	wrapper->dev = dev;
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	wrapper->base = devm_ioremap_resource(dev, res);
+	wrapper->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(wrapper->base))
 		return PTR_ERR(wrapper->base);
 

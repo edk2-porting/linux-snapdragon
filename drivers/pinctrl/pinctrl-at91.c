@@ -1712,10 +1712,8 @@ static void gpio_irq_handler(struct irq_desc *desc)
 			continue;
 		}
 
-		for_each_set_bit(n, &isr, BITS_PER_LONG) {
-			generic_handle_irq(irq_find_mapping(
-					   gpio_chip->irq.domain, n));
-		}
+		for_each_set_bit(n, &isr, BITS_PER_LONG)
+			generic_handle_domain_irq(gpio_chip->irq.domain, n);
 	}
 	chained_irq_exit(chip, desc);
 	/* now it may re-trigger */
@@ -1870,7 +1868,6 @@ static int at91_gpio_probe(struct platform_device *pdev)
 	at91_chip->chip = at91_gpio_template;
 
 	chip = &at91_chip->chip;
-	chip->of_node = np;
 	chip->label = dev_name(&pdev->dev);
 	chip->parent = &pdev->dev;
 	chip->owner = THIS_MODULE;

@@ -135,12 +135,14 @@ typedef u64 gen8_pte_t;
 #define GEN8_PPAT_ELLC_OVERRIDE		(0<<2)
 #define GEN8_PPAT(i, x)			((u64)(x) << ((i) * 8))
 
+#define GEN8_PAGE_PRESENT		BIT_ULL(0)
+#define GEN8_PAGE_RW			BIT_ULL(1)
+
 #define GEN8_PDE_IPS_64K BIT(11)
 #define GEN8_PDE_PS_2M   BIT(7)
 
 enum i915_cache_level;
 
-struct drm_i915_file_private;
 struct drm_i915_gem_object;
 struct i915_fence_reg;
 struct i915_vma;
@@ -207,29 +209,16 @@ struct i915_vma_ops {
 	 */
 	void (*unbind_vma)(struct i915_address_space *vm,
 			   struct i915_vma *vma);
-
-	int (*set_pages)(struct i915_vma *vma);
-	void (*clear_pages)(struct i915_vma *vma);
 };
 
 struct i915_address_space {
 	struct kref ref;
-	struct rcu_work rcu;
+	struct work_struct release_work;
 
 	struct drm_mm mm;
 	struct intel_gt *gt;
 	struct drm_i915_private *i915;
 	struct device *dma;
-	/*
-	 * Every address space belongs to a struct file - except for the global
-	 * GTT that is owned by the driver (and so @file is set to NULL). In
-	 * principle, no information should leak from one context to another
-	 * (or between files/processes etc) unless explicitly shared by the
-	 * owner. Tracking the owner is important in order to free up per-file
-	 * objects along with the file, to aide resource tracking, and to
-	 * assign blame.
-	 */
-	struct drm_i915_file_private *file;
 	u64 total;		/* size addr space maps (ex. 2GB for ggtt) */
 	u64 reserved;		/* size addr space reserved */
 
@@ -271,8 +260,13 @@ struct i915_address_space {
 	u8 pd_shift;
 	u8 scratch_order;
 
+	/* Flags used when creating page-table objects for this vm */
+	unsigned long lmem_pt_obj_flags;
+
 	struct drm_i915_gem_object *
 		(*alloc_pt_dma)(struct i915_address_space *vm, int sz);
+	struct drm_i915_gem_object *
+		(*alloc_scratch_dma)(struct i915_address_space *vm, int sz);
 
 	u64 (*pte_encode)(dma_addr_t addr,
 			  enum i915_cache_level level,
@@ -295,6 +289,13 @@ struct i915_address_space {
 			       enum i915_cache_level cache_level,
 			       u32 flags);
 	void (*cleanup)(struct i915_address_space *vm);
+
+	void (*foreach)(struct i915_address_space *vm,
+			u64 start, u64 length,
+			void (*fn)(struct i915_address_space *vm,
+				   struct i915_page_table *pt,
+				   void *data),
+			void *data);
 
 	struct i915_vma_ops vma_ops;
 
@@ -523,7 +524,8 @@ i915_page_dir_dma_addr(const struct i915_ppgtt *ppgtt, const unsigned int n)
 	return __px_dma(pt ? px_base(pt) : ppgtt->vm.scratch[ppgtt->vm.top]);
 }
 
-void ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt);
+void ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt,
+		unsigned long lmem_pt_obj_flags);
 
 int i915_ggtt_probe_hw(struct drm_i915_private *i915);
 int i915_ggtt_init_hw(struct drm_i915_private *i915);
@@ -541,8 +543,11 @@ static inline bool i915_ggtt_has_aperture(const struct i915_ggtt *ggtt)
 
 int i915_ppgtt_init_hw(struct intel_gt *gt);
 
-struct i915_ppgtt *i915_ppgtt_create(struct intel_gt *gt);
+struct i915_ppgtt *i915_ppgtt_create(struct intel_gt *gt,
+				     unsigned long lmem_pt_obj_flags);
 
+void i915_ggtt_suspend_vm(struct i915_address_space *vm);
+bool i915_ggtt_resume_vm(struct i915_address_space *vm);
 void i915_ggtt_suspend(struct i915_ggtt *gtt);
 void i915_ggtt_resume(struct i915_ggtt *ggtt);
 
@@ -592,10 +597,6 @@ release_pd_entry(struct i915_page_directory * const pd,
 		 struct i915_page_table * const pt,
 		 const struct drm_i915_gem_object * const scratch);
 void gen6_ggtt_invalidate(struct i915_ggtt *ggtt);
-
-int ggtt_set_pages(struct i915_vma *vma);
-int ppgtt_set_pages(struct i915_vma *vma);
-void clear_pages(struct i915_vma *vma);
 
 void ppgtt_bind_vma(struct i915_address_space *vm,
 		    struct i915_vm_pt_stash *stash,

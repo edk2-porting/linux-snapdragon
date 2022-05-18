@@ -363,67 +363,22 @@ static int __maybe_unused ipc_pcie_resume_s2idle(struct iosm_pcie *ipc_pcie)
 
 int __maybe_unused ipc_pcie_suspend(struct iosm_pcie *ipc_pcie)
 {
-	struct pci_dev *pdev;
-	int ret;
-
-	pdev = ipc_pcie->pci;
-
-	/* Execute D3 one time. */
-	if (pdev->current_state != PCI_D0) {
-		dev_dbg(ipc_pcie->dev, "done for PM=%d", pdev->current_state);
-		return 0;
-	}
-
 	/* The HAL shall ask the shared memory layer whether D3 is allowed. */
 	ipc_imem_pm_suspend(ipc_pcie->imem);
 
-	/* Save the PCI configuration space of a device before suspending. */
-	ret = pci_save_state(pdev);
-
-	if (ret) {
-		dev_err(ipc_pcie->dev, "pci_save_state error=%d", ret);
-		return ret;
-	}
-
-	/* Set the power state of a PCI device.
-	 * Transition a device to a new power state, using the device's PCI PM
-	 * registers.
-	 */
-	ret = pci_set_power_state(pdev, PCI_D3cold);
-
-	if (ret) {
-		dev_err(ipc_pcie->dev, "pci_set_power_state error=%d", ret);
-		return ret;
-	}
-
 	dev_dbg(ipc_pcie->dev, "SUSPEND done");
-	return ret;
+	return 0;
 }
 
 int __maybe_unused ipc_pcie_resume(struct iosm_pcie *ipc_pcie)
 {
-	int ret;
-
-	/* Set the power state of a PCI device.
-	 * Transition a device to a new power state, using the device's PCI PM
-	 * registers.
-	 */
-	ret = pci_set_power_state(ipc_pcie->pci, PCI_D0);
-
-	if (ret) {
-		dev_err(ipc_pcie->dev, "pci_set_power_state error=%d", ret);
-		return ret;
-	}
-
-	pci_restore_state(ipc_pcie->pci);
-
 	/* The HAL shall inform the shared memory layer that the device is
 	 * active.
 	 */
 	ipc_imem_pm_resume(ipc_pcie->imem);
 
 	dev_dbg(ipc_pcie->dev, "RESUME done");
-	return ret;
+	return 0;
 }
 
 static int __maybe_unused ipc_pcie_suspend_cb(struct device *dev)
@@ -479,6 +434,7 @@ static struct pci_driver iosm_ipc_driver = {
 	},
 	.id_table = iosm_ipc_ids,
 };
+module_pci_driver(iosm_ipc_driver);
 
 int ipc_pcie_addr_map(struct iosm_pcie *ipc_pcie, unsigned char *data,
 		      size_t size, dma_addr_t *mapping, int direction)
@@ -560,21 +516,3 @@ void ipc_pcie_kfree_skb(struct iosm_pcie *ipc_pcie, struct sk_buff *skb)
 	IPC_CB(skb)->mapping = 0;
 	dev_kfree_skb(skb);
 }
-
-static int __init iosm_ipc_driver_init(void)
-{
-	if (pci_register_driver(&iosm_ipc_driver)) {
-		pr_err("registering of IOSM PCIe driver failed");
-		return -1;
-	}
-
-	return 0;
-}
-
-static void __exit iosm_ipc_driver_exit(void)
-{
-	pci_unregister_driver(&iosm_ipc_driver);
-}
-
-module_init(iosm_ipc_driver_init);
-module_exit(iosm_ipc_driver_exit);

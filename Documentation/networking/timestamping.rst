@@ -486,8 +486,8 @@ of packets.
 Drivers are free to use a more permissive configuration than the requested
 configuration. It is expected that drivers should only implement directly the
 most generic mode that can be supported. For example if the hardware can
-support HWTSTAMP_FILTER_V2_EVENT, then it should generally always upscale
-HWTSTAMP_FILTER_V2_L2_SYNC_MESSAGE, and so forth, as HWTSTAMP_FILTER_V2_EVENT
+support HWTSTAMP_FILTER_PTP_V2_EVENT, then it should generally always upscale
+HWTSTAMP_FILTER_PTP_V2_L2_SYNC, and so forth, as HWTSTAMP_FILTER_PTP_V2_EVENT
 is more generic (and more useful to applications).
 
 A driver which supports hardware time stamping shall update the struct
@@ -582,8 +582,8 @@ Time stamps for outgoing packets are to be generated as follows:
   and hardware timestamping is not possible (SKBTX_IN_PROGRESS not set).
 - As soon as the driver has sent the packet and/or obtained a
   hardware time stamp for it, it passes the time stamp back by
-  calling skb_hwtstamp_tx() with the original skb, the raw
-  hardware time stamp. skb_hwtstamp_tx() clones the original skb and
+  calling skb_tstamp_tx() with the original skb, the raw
+  hardware time stamp. skb_tstamp_tx() clones the original skb and
   adds the timestamps, therefore the original skb has to be freed now.
   If obtaining the hardware time stamp somehow fails, then the driver
   should not fall back to software time stamping. The rationale is that
@@ -625,7 +625,7 @@ interfaces of a DSA switch to share the same PHC.
 By design, PTP timestamping with a DSA switch does not need any special
 handling in the driver for the host port it is attached to.  However, when the
 host port also supports PTP timestamping, DSA will take care of intercepting
-the ``.ndo_do_ioctl`` calls towards the host port, and block attempts to enable
+the ``.ndo_eth_ioctl`` calls towards the host port, and block attempts to enable
 hardware timestamping on it. This is because the SO_TIMESTAMPING API does not
 allow the delivery of multiple hardware timestamps for the same packet, so
 anybody else except for the DSA switch port must be prevented from doing so.
@@ -688,7 +688,7 @@ ethtool ioctl operations for them need to be mediated by their respective MAC
 driver.  Therefore, as opposed to DSA switches, modifications need to be done
 to each individual MAC driver for PHY timestamping support. This entails:
 
-- Checking, in ``.ndo_do_ioctl``, whether ``phy_has_hwtstamp(netdev->phydev)``
+- Checking, in ``.ndo_eth_ioctl``, whether ``phy_has_hwtstamp(netdev->phydev)``
   is true or not. If it is, then the MAC driver should not process this request
   but instead pass it on to the PHY using ``phy_mii_ioctl()``.
 
@@ -747,7 +747,7 @@ For example, a typical driver design for TX timestamping might be to split the
 transmission part into 2 portions:
 
 1. "TX": checks whether PTP timestamping has been previously enabled through
-   the ``.ndo_do_ioctl`` ("``priv->hwtstamp_tx_enabled == true``") and the
+   the ``.ndo_eth_ioctl`` ("``priv->hwtstamp_tx_enabled == true``") and the
    current skb requires a TX timestamp ("``skb_shinfo(skb)->tx_flags &
    SKBTX_HW_TSTAMP``"). If this is true, it sets the
    "``skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS``" flag. Note: as

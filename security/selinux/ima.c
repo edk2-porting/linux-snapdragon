@@ -77,7 +77,7 @@ void selinux_ima_measure_state_locked(struct selinux_state *state)
 	size_t policy_len;
 	int rc = 0;
 
-	WARN_ON(!mutex_is_locked(&state->policy_mutex));
+	lockdep_assert_held(&state->policy_mutex);
 
 	state_str = selinux_ima_collect_state(state);
 	if (!state_str) {
@@ -86,7 +86,8 @@ void selinux_ima_measure_state_locked(struct selinux_state *state)
 	}
 
 	ima_measure_critical_data("selinux", "selinux-state",
-				  state_str, strlen(state_str), false);
+				  state_str, strlen(state_str), false,
+				  NULL, 0);
 
 	kfree(state_str);
 
@@ -103,7 +104,8 @@ void selinux_ima_measure_state_locked(struct selinux_state *state)
 	}
 
 	ima_measure_critical_data("selinux", "selinux-policy-hash",
-				  policy, policy_len, true);
+				  policy, policy_len, true,
+				  NULL, 0);
 
 	vfree(policy);
 }
@@ -115,7 +117,7 @@ void selinux_ima_measure_state_locked(struct selinux_state *state)
  */
 void selinux_ima_measure_state(struct selinux_state *state)
 {
-	WARN_ON(mutex_is_locked(&state->policy_mutex));
+	lockdep_assert_not_held(&state->policy_mutex);
 
 	mutex_lock(&state->policy_mutex);
 	selinux_ima_measure_state_locked(state);

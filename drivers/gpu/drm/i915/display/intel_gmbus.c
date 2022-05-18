@@ -334,6 +334,15 @@ intel_gpio_setup(struct intel_gmbus *bus, unsigned int pin)
 	algo->data = bus;
 }
 
+static bool has_gmbus_irq(struct drm_i915_private *i915)
+{
+	/*
+	 * encoder->shutdown() may want to use GMBUS
+	 * after irqs have already been disabled.
+	 */
+	return HAS_GMBUS_IRQ(i915) && intel_irqs_enabled(i915);
+}
+
 static int gmbus_wait(struct drm_i915_private *dev_priv, u32 status, u32 irq_en)
 {
 	DEFINE_WAIT(wait);
@@ -344,7 +353,7 @@ static int gmbus_wait(struct drm_i915_private *dev_priv, u32 status, u32 irq_en)
 	 * we also need to check for NAKs besides the hw ready/idle signal, we
 	 * need to wake up periodically and check that ourselves.
 	 */
-	if (!HAS_GMBUS_IRQ(dev_priv))
+	if (!has_gmbus_irq(dev_priv))
 		irq_en = 0;
 
 	add_wait_queue(&dev_priv->gmbus_wait_queue, &wait);
@@ -375,7 +384,7 @@ gmbus_wait_idle(struct drm_i915_private *dev_priv)
 
 	/* Important: The hw handles only the first bit, so set only one! */
 	irq_enable = 0;
-	if (HAS_GMBUS_IRQ(dev_priv))
+	if (has_gmbus_irq(dev_priv))
 		irq_enable = GMBUS_IDLE_EN;
 
 	add_wait_queue(&dev_priv->gmbus_wait_queue, &wait);
@@ -600,7 +609,7 @@ do_gmbus_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs, int num,
 	int i = 0, inc, try = 0;
 	int ret = 0;
 
-	/* Display WA #0868: skl,bxt,kbl,cfl,glk,cnl */
+	/* Display WA #0868: skl,bxt,kbl,cfl,glk */
 	if (IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
 		bxt_gmbus_clock_gating(dev_priv, false);
 	else if (HAS_PCH_SPT(dev_priv) || HAS_PCH_CNP(dev_priv))
@@ -713,7 +722,7 @@ timeout:
 	ret = -EAGAIN;
 
 out:
-	/* Display WA #0868: skl,bxt,kbl,cfl,glk,cnl */
+	/* Display WA #0868: skl,bxt,kbl,cfl,glk */
 	if (IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
 		bxt_gmbus_clock_gating(dev_priv, true);
 	else if (HAS_PCH_SPT(dev_priv) || HAS_PCH_CNP(dev_priv))

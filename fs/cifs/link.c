@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: LGPL-2.1
 /*
- *   fs/cifs/link.c
  *
  *   Copyright (C) International Business Machines  Corp., 2002,2008
  *   Author(s): Steve French (sfrench@us.ibm.com)
@@ -84,6 +83,9 @@ parse_mf_symlink(const u8 *buf, unsigned int buf_len, unsigned int *_link_len,
 
 	rc = sscanf(buf, CIFS_MF_SYMLINK_LEN_FORMAT, &link_len);
 	if (rc != 1)
+		return -EINVAL;
+
+	if (link_len > CIFS_MF_SYMLINK_LINK_MAXLEN)
 		return -EINVAL;
 
 	rc = symlink_hash(link_len, link_str, md5_hash);

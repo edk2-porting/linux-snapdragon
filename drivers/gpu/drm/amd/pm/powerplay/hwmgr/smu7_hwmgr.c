@@ -3227,7 +3227,7 @@ static int smu7_force_dpm_level(struct pp_hwmgr *hwmgr,
 
 	if (!ret) {
 		if (level == AMD_DPM_FORCED_LEVEL_PROFILE_PEAK && hwmgr->dpm_level != AMD_DPM_FORCED_LEVEL_PROFILE_PEAK)
-			smu7_fan_ctrl_set_fan_speed_percent(hwmgr, 100);
+			smu7_fan_ctrl_set_fan_speed_pwm(hwmgr, 255);
 		else if (level != AMD_DPM_FORCED_LEVEL_PROFILE_PEAK && hwmgr->dpm_level == AMD_DPM_FORCED_LEVEL_PROFILE_PEAK)
 			smu7_fan_ctrl_reset_fan_speed_to_default(hwmgr);
 	}
@@ -4911,8 +4911,8 @@ static int smu7_print_clock_levels(struct pp_hwmgr *hwmgr,
 	struct smu7_odn_dpm_table *odn_table = &(data->odn_dpm_table);
 	struct phm_odn_clock_levels *odn_sclk_table = &(odn_table->odn_core_clock_dpm_levels);
 	struct phm_odn_clock_levels *odn_mclk_table = &(odn_table->odn_memory_clock_dpm_levels);
-	int i, now, size = 0;
-	uint32_t clock, pcie_speed;
+	int size = 0;
+	uint32_t i, now, clock, pcie_speed;
 
 	switch (type) {
 	case PP_SCLK:
@@ -4963,7 +4963,7 @@ static int smu7_print_clock_levels(struct pp_hwmgr *hwmgr,
 		break;
 	case OD_SCLK:
 		if (hwmgr->od_enabled) {
-			size = sprintf(buf, "%s:\n", "OD_SCLK");
+			size += sprintf(buf + size, "%s:\n", "OD_SCLK");
 			for (i = 0; i < odn_sclk_table->num_of_pl; i++)
 				size += sprintf(buf + size, "%d: %10uMHz %10umV\n",
 					i, odn_sclk_table->entries[i].clock/100,
@@ -4972,7 +4972,7 @@ static int smu7_print_clock_levels(struct pp_hwmgr *hwmgr,
 		break;
 	case OD_MCLK:
 		if (hwmgr->od_enabled) {
-			size = sprintf(buf, "%s:\n", "OD_MCLK");
+			size += sprintf(buf + size, "%s:\n", "OD_MCLK");
 			for (i = 0; i < odn_mclk_table->num_of_pl; i++)
 				size += sprintf(buf + size, "%d: %10uMHz %10umV\n",
 					i, odn_mclk_table->entries[i].clock/100,
@@ -4981,7 +4981,7 @@ static int smu7_print_clock_levels(struct pp_hwmgr *hwmgr,
 		break;
 	case OD_RANGE:
 		if (hwmgr->od_enabled) {
-			size = sprintf(buf, "%s:\n", "OD_RANGE");
+			size += sprintf(buf + size, "%s:\n", "OD_RANGE");
 			size += sprintf(buf + size, "SCLK: %7uMHz %10uMHz\n",
 				data->golden_dpm_table.sclk_table.dpm_levels[0].value/100,
 				hwmgr->platform_descriptor.overdriveLimit.engineClock/100);
@@ -5003,7 +5003,7 @@ static void smu7_set_fan_control_mode(struct pp_hwmgr *hwmgr, uint32_t mode)
 {
 	switch (mode) {
 	case AMD_FAN_CTRL_NONE:
-		smu7_fan_ctrl_set_fan_speed_percent(hwmgr, 100);
+		smu7_fan_ctrl_set_fan_speed_pwm(hwmgr, 255);
 		break;
 	case AMD_FAN_CTRL_MANUAL:
 		if (phm_cap_enabled(hwmgr->platform_descriptor.platformCaps,
@@ -5498,14 +5498,6 @@ static int smu7_get_power_profile_mode(struct pp_hwmgr *hwmgr, char *buf)
 	uint32_t i, size = 0;
 	uint32_t len;
 
-	static const char *profile_name[7] = {"BOOTUP_DEFAULT",
-					"3D_FULL_SCREEN",
-					"POWER_SAVING",
-					"VIDEO",
-					"VR",
-					"COMPUTE",
-					"CUSTOM"};
-
 	static const char *title[8] = {"NUM",
 			"MODE_NAME",
 			"SCLK_UP_HYST",
@@ -5518,7 +5510,9 @@ static int smu7_get_power_profile_mode(struct pp_hwmgr *hwmgr, char *buf)
 	if (!buf)
 		return -EINVAL;
 
-	size += sprintf(buf + size, "%s %16s %16s %16s %16s %16s %16s %16s\n",
+	phm_get_sysfs_buf(&buf, &size);
+
+	size += sysfs_emit_at(buf, size, "%s %16s %16s %16s %16s %16s %16s %16s\n",
 			title[0], title[1], title[2], title[3],
 			title[4], title[5], title[6], title[7]);
 
@@ -5526,8 +5520,8 @@ static int smu7_get_power_profile_mode(struct pp_hwmgr *hwmgr, char *buf)
 
 	for (i = 0; i < len; i++) {
 		if (i == hwmgr->power_profile_mode) {
-			size += sprintf(buf + size, "%3d %14s %s: %8d %16d %16d %16d %16d %16d\n",
-			i, profile_name[i], "*",
+			size += sysfs_emit_at(buf, size, "%3d %14s %s: %8d %16d %16d %16d %16d %16d\n",
+			i, amdgpu_pp_profile_name[i], "*",
 			data->current_profile_setting.sclk_up_hyst,
 			data->current_profile_setting.sclk_down_hyst,
 			data->current_profile_setting.sclk_activity,
@@ -5537,21 +5531,21 @@ static int smu7_get_power_profile_mode(struct pp_hwmgr *hwmgr, char *buf)
 			continue;
 		}
 		if (smu7_profiling[i].bupdate_sclk)
-			size += sprintf(buf + size, "%3d %16s: %8d %16d %16d ",
-			i, profile_name[i], smu7_profiling[i].sclk_up_hyst,
+			size += sysfs_emit_at(buf, size, "%3d %16s: %8d %16d %16d ",
+			i, amdgpu_pp_profile_name[i], smu7_profiling[i].sclk_up_hyst,
 			smu7_profiling[i].sclk_down_hyst,
 			smu7_profiling[i].sclk_activity);
 		else
-			size += sprintf(buf + size, "%3d %16s: %8s %16s %16s ",
-			i, profile_name[i], "-", "-", "-");
+			size += sysfs_emit_at(buf, size, "%3d %16s: %8s %16s %16s ",
+			i, amdgpu_pp_profile_name[i], "-", "-", "-");
 
 		if (smu7_profiling[i].bupdate_mclk)
-			size += sprintf(buf + size, "%16d %16d %16d\n",
+			size += sysfs_emit_at(buf, size, "%16d %16d %16d\n",
 			smu7_profiling[i].mclk_up_hyst,
 			smu7_profiling[i].mclk_down_hyst,
 			smu7_profiling[i].mclk_activity);
 		else
-			size += sprintf(buf + size, "%16s %16s %16s\n",
+			size += sysfs_emit_at(buf, size, "%16s %16s %16s\n",
 			"-", "-", "-");
 	}
 
@@ -5707,8 +5701,8 @@ static const struct pp_hwmgr_func smu7_hwmgr_funcs = {
 	.set_max_fan_rpm_output = smu7_set_max_fan_rpm_output,
 	.stop_thermal_controller = smu7_thermal_stop_thermal_controller,
 	.get_fan_speed_info = smu7_fan_ctrl_get_fan_speed_info,
-	.get_fan_speed_percent = smu7_fan_ctrl_get_fan_speed_percent,
-	.set_fan_speed_percent = smu7_fan_ctrl_set_fan_speed_percent,
+	.get_fan_speed_pwm = smu7_fan_ctrl_get_fan_speed_pwm,
+	.set_fan_speed_pwm = smu7_fan_ctrl_set_fan_speed_pwm,
 	.reset_fan_speed_to_default = smu7_fan_ctrl_reset_fan_speed_to_default,
 	.get_fan_speed_rpm = smu7_fan_ctrl_get_fan_speed_rpm,
 	.set_fan_speed_rpm = smu7_fan_ctrl_set_fan_speed_rpm,

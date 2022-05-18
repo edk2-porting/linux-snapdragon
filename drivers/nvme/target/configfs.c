@@ -1028,7 +1028,7 @@ nvmet_subsys_attr_version_store_locked(struct nvmet_subsys *subsys,
 	}
 
 	/* passthru subsystems use the underlying controller's version */
-	if (nvmet_passthru_ctrl(subsys))
+	if (nvmet_is_passthru_subsys(subsys))
 		return -EINVAL;
 
 	ret = sscanf(page, "%d.%d.%d\n", &major, &minor, &tertiary);
@@ -1067,7 +1067,7 @@ static ssize_t nvmet_subsys_attr_serial_show(struct config_item *item,
 {
 	struct nvmet_subsys *subsys = to_subsys(item);
 
-	return snprintf(page, PAGE_SIZE, "%*s\n",
+	return snprintf(page, PAGE_SIZE, "%.*s\n",
 			NVMET_SN_MAX_SIZE, subsys->serial);
 }
 
@@ -1553,6 +1553,8 @@ static void nvmet_port_release(struct config_item *item)
 {
 	struct nvmet_port *port = to_nvmet_port(item);
 
+	/* Let inflight controllers teardown complete */
+	flush_scheduled_work();
 	list_del(&port->global_entry);
 
 	kfree(port->ana_state);

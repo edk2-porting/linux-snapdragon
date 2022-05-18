@@ -258,8 +258,9 @@ int platform_get_irq(struct platform_device *dev, unsigned int num)
 	int ret;
 
 	ret = platform_get_irq_optional(dev, num);
-	if (ret < 0 && ret != -EPROBE_DEFER)
-		dev_err(&dev->dev, "IRQ index %u not found\n", num);
+	if (ret < 0)
+		return dev_err_probe(&dev->dev, ret,
+				     "IRQ index %u not found\n", num);
 
 	return ret;
 }
@@ -642,22 +643,6 @@ int platform_device_add_data(struct platform_device *pdev, const void *data,
 EXPORT_SYMBOL_GPL(platform_device_add_data);
 
 /**
- * platform_device_add_properties - add built-in properties to a platform device
- * @pdev: platform device to add properties to
- * @properties: null terminated array of properties to add
- *
- * The function will take deep copy of @properties and attach the copy to the
- * platform device. The memory associated with properties will be freed when the
- * platform device is released.
- */
-int platform_device_add_properties(struct platform_device *pdev,
-				   const struct property_entry *properties)
-{
-	return device_add_properties(&pdev->dev, properties);
-}
-EXPORT_SYMBOL_GPL(platform_device_add_properties);
-
-/**
  * platform_device_add - add a platform device to device hierarchy
  * @pdev: platform device we're adding
  *
@@ -778,6 +763,10 @@ EXPORT_SYMBOL_GPL(platform_device_del);
 /**
  * platform_device_register - add a platform-level device
  * @pdev: platform device we're adding
+ *
+ * NOTE: _Never_ directly free @pdev after calling this function, even if it
+ * returned an error! Always use platform_device_put() to give up the
+ * reference initialised in this function instead.
  */
 int platform_device_register(struct platform_device *pdev)
 {
@@ -842,8 +831,8 @@ struct platform_device *platform_device_register_full(
 		goto err;
 
 	if (pdevinfo->properties) {
-		ret = platform_device_add_properties(pdev,
-						     pdevinfo->properties);
+		ret = device_create_managed_software_node(&pdev->dev,
+							  pdevinfo->properties, NULL);
 		if (ret)
 			goto err;
 	}
@@ -1438,7 +1427,7 @@ out:
 	return ret;
 }
 
-static int platform_remove(struct device *_dev)
+static void platform_remove(struct device *_dev)
 {
 	struct platform_driver *drv = to_platform_driver(_dev->driver);
 	struct platform_device *dev = to_platform_device(_dev);
@@ -1450,8 +1439,6 @@ static int platform_remove(struct device *_dev)
 			dev_warn(_dev, "remove callback returned a non-zero value. This will be ignored.\n");
 	}
 	dev_pm_domain_detach(_dev, true);
-
-	return 0;
 }
 
 static void platform_shutdown(struct device *_dev)
@@ -1484,8 +1471,7 @@ int platform_dma_configure(struct device *dev)
 }
 
 static const struct dev_pm_ops platform_dev_pm_ops = {
-	.runtime_suspend = pm_generic_runtime_suspend,
-	.runtime_resume = pm_generic_runtime_resume,
+	SET_RUNTIME_PM_OPS(pm_generic_runtime_suspend, pm_generic_runtime_resume, NULL)
 	USE_PLATFORM_PM_SLEEP_OPS
 };
 

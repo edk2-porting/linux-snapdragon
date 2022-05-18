@@ -31,7 +31,7 @@ enum dm_queue_mode {
 	DM_TYPE_DAX_BIO_BASED	 = 3,
 };
 
-typedef enum { STATUSTYPE_INFO, STATUSTYPE_TABLE } status_type_t;
+typedef enum { STATUSTYPE_INFO, STATUSTYPE_TABLE, STATUSTYPE_IMA } status_type_t;
 
 union map_info {
 	void *ptr;
@@ -147,11 +147,8 @@ typedef int (*dm_busy_fn) (struct dm_target *ti);
  */
 typedef long (*dm_dax_direct_access_fn) (struct dm_target *ti, pgoff_t pgoff,
 		long nr_pages, void **kaddr, pfn_t *pfn);
-typedef size_t (*dm_dax_copy_iter_fn)(struct dm_target *ti, pgoff_t pgoff,
-		void *addr, size_t bytes, struct iov_iter *i);
 typedef int (*dm_dax_zero_page_range_fn)(struct dm_target *ti, pgoff_t pgoff,
 		size_t nr_pages);
-#define PAGE_SECTORS (PAGE_SIZE / 512)
 
 void dm_error(const char *message);
 
@@ -201,8 +198,6 @@ struct target_type {
 	dm_iterate_devices_fn iterate_devices;
 	dm_io_hints_fn io_hints;
 	dm_dax_direct_access_fn direct_access;
-	dm_dax_copy_iter_fn dax_copy_from_iter;
-	dm_dax_copy_iter_fn dax_copy_to_iter;
 	dm_dax_zero_page_range_fn dax_zero_page_range;
 
 	/* For internal device-mapper use. */
@@ -577,9 +572,9 @@ struct dm_table *dm_swap_table(struct mapped_device *md,
 			       struct dm_table *t);
 
 /*
- * Table keyslot manager functions
+ * Table blk_crypto_profile functions
  */
-void dm_destroy_keyslot_manager(struct blk_keyslot_manager *ksm);
+void dm_destroy_crypto_profile(struct blk_crypto_profile *profile);
 
 /*-----------------------------------------------------------------
  * Macros.
@@ -602,6 +597,10 @@ void dm_destroy_keyslot_manager(struct blk_keyslot_manager *ksm);
 
 #define DMEMIT(x...) sz += ((sz >= maxlen) ? \
 			  0 : scnprintf(result + sz, maxlen - sz, x))
+
+#define DMEMIT_TARGET_NAME_VERSION(y) \
+		DMEMIT("target_name=%s,target_version=%u.%u.%u", \
+		       (y)->name, (y)->version[0], (y)->version[1], (y)->version[2])
 
 /*
  * Definitions of return values from target end_io function.

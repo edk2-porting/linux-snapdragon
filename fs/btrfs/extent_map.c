@@ -261,6 +261,7 @@ static void try_merge_map(struct extent_map_tree *tree, struct extent_map *em)
 			em->mod_len = (em->mod_len + em->mod_start) - merge->mod_start;
 			em->mod_start = merge->mod_start;
 			em->generation = max(em->generation, merge->generation);
+			set_bit(EXTENT_FLAG_MERGED, &em->flags);
 
 			rb_erase_cached(&merge->rb_node, &tree->map);
 			RB_CLEAR_NODE(&merge->rb_node);
@@ -278,6 +279,7 @@ static void try_merge_map(struct extent_map_tree *tree, struct extent_map *em)
 		RB_CLEAR_NODE(&merge->rb_node);
 		em->mod_len = (merge->mod_start + merge->mod_len) - em->mod_start;
 		em->generation = max(em->generation, merge->generation);
+		set_bit(EXTENT_FLAG_MERGED, &em->flags);
 		free_extent_map(merge);
 	}
 }
@@ -360,7 +362,7 @@ static void extent_map_device_set_bits(struct extent_map *em, unsigned bits)
 	int i;
 
 	for (i = 0; i < map->num_stripes; i++) {
-		struct btrfs_bio_stripe *stripe = &map->stripes[i];
+		struct btrfs_io_stripe *stripe = &map->stripes[i];
 		struct btrfs_device *device = stripe->dev;
 
 		set_extent_bits_nowait(&device->alloc_state, stripe->physical,
@@ -375,7 +377,7 @@ static void extent_map_device_clear_bits(struct extent_map *em, unsigned bits)
 	int i;
 
 	for (i = 0; i < map->num_stripes; i++) {
-		struct btrfs_bio_stripe *stripe = &map->stripes[i];
+		struct btrfs_io_stripe *stripe = &map->stripes[i];
 		struct btrfs_device *device = stripe->dev;
 
 		__clear_extent_bit(&device->alloc_state, stripe->physical,

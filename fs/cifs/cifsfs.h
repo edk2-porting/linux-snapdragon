@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1 */
 /*
- *   fs/cifs/cifsfs.h
  *
  *   Copyright (c) International Business Machines  Corp., 2002, 2007
  *   Author(s): Steve French (sfrench@us.ibm.com)
@@ -153,5 +152,6 @@ extern struct dentry *cifs_smb3_do_mount(struct file_system_type *fs_type,
 extern const struct export_operations cifs_export_ops;
 #endif /* CONFIG_CIFS_NFSD_EXPORT */
 
-#define CIFS_VERSION   "2.33"
+#define SMB3_PRODUCT_BUILD 35
+#define CIFS_VERSION   "2.35"
 #endif				/* _CIFSFS_H */

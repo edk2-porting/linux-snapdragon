@@ -480,7 +480,8 @@ err_port_flood_set:
 }
 
 int prestera_bridge_port_join(struct net_device *br_dev,
-			      struct prestera_port *port)
+			      struct prestera_port *port,
+			      struct netlink_ext_ack *extack)
 {
 	struct prestera_switchdev *swdev = port->sw->swdev;
 	struct prestera_bridge_port *br_port;
@@ -496,9 +497,14 @@ int prestera_bridge_port_join(struct net_device *br_dev,
 
 	br_port = prestera_bridge_port_add(bridge, port->dev);
 	if (IS_ERR(br_port)) {
-		err = PTR_ERR(br_port);
-		goto err_brport_create;
+		prestera_bridge_put(bridge);
+		return PTR_ERR(br_port);
 	}
+
+	err = switchdev_bridge_port_offload(br_port->dev, port->dev, NULL,
+					    NULL, NULL, false, extack);
+	if (err)
+		goto err_switchdev_offload;
 
 	if (bridge->vlan_enabled)
 		return 0;
@@ -510,9 +516,9 @@ int prestera_bridge_port_join(struct net_device *br_dev,
 	return 0;
 
 err_port_join:
+	switchdev_bridge_port_unoffload(br_port->dev, NULL, NULL, NULL);
+err_switchdev_offload:
 	prestera_bridge_port_put(br_port);
-err_brport_create:
-	prestera_bridge_put(bridge);
 	return err;
 }
 
@@ -583,6 +589,8 @@ void prestera_bridge_port_leave(struct net_device *br_dev,
 		prestera_bridge_1q_port_leave(br_port);
 	else
 		prestera_bridge_1d_port_leave(br_port);
+
+	switchdev_bridge_port_unoffload(br_port->dev, NULL, NULL, NULL);
 
 	prestera_hw_port_learning_set(port, false);
 	prestera_hw_port_flood_set(port, BR_FLOOD | BR_MCAST_FLOOD, 0);
@@ -1114,7 +1122,7 @@ static int prestera_switchdev_blk_event(struct notifier_block *unused,
 						     prestera_port_obj_attr_set);
 		break;
 	default:
-		err = -EOPNOTSUPP;
+		return NOTIFY_DONE;
 	}
 
 	return notifier_from_errno(err);

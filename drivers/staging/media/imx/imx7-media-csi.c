@@ -423,6 +423,7 @@ static void imx7_csi_configure(struct imx7_csi *csi)
 	struct v4l2_pix_format *out_pix = &vdev->fmt;
 	int width = out_pix->width;
 	u32 stride = 0;
+	u32 cr3 = BIT_FRMCNT_RST;
 	u32 cr1, cr18;
 
 	cr18 = imx7_csi_reg_read(csi, CSI_CSICR18);
@@ -466,6 +467,7 @@ static void imx7_csi_configure(struct imx7_csi *csi)
 		case MEDIA_BUS_FMT_SGBRG10_1X10:
 		case MEDIA_BUS_FMT_SGRBG10_1X10:
 		case MEDIA_BUS_FMT_SRGGB10_1X10:
+			cr3 |= BIT_TWO_8BIT_SENSOR;
 			cr18 |= BIT_MIPI_DATA_FORMAT_RAW10;
 			break;
 		case MEDIA_BUS_FMT_Y12_1X12:
@@ -473,6 +475,7 @@ static void imx7_csi_configure(struct imx7_csi *csi)
 		case MEDIA_BUS_FMT_SGBRG12_1X12:
 		case MEDIA_BUS_FMT_SGRBG12_1X12:
 		case MEDIA_BUS_FMT_SRGGB12_1X12:
+			cr3 |= BIT_TWO_8BIT_SENSOR;
 			cr18 |= BIT_MIPI_DATA_FORMAT_RAW12;
 			break;
 		case MEDIA_BUS_FMT_Y14_1X14:
@@ -480,6 +483,7 @@ static void imx7_csi_configure(struct imx7_csi *csi)
 		case MEDIA_BUS_FMT_SGBRG14_1X14:
 		case MEDIA_BUS_FMT_SGRBG14_1X14:
 		case MEDIA_BUS_FMT_SRGGB14_1X14:
+			cr3 |= BIT_TWO_8BIT_SENSOR;
 			cr18 |= BIT_MIPI_DATA_FORMAT_RAW14;
 			break;
 		/*
@@ -493,26 +497,11 @@ static void imx7_csi_configure(struct imx7_csi *csi)
 			cr18 |= BIT_MIPI_DATA_FORMAT_YUV422_8B;
 			break;
 		}
-
-		switch (out_pix->pixelformat) {
-		case V4L2_PIX_FMT_Y10:
-		case V4L2_PIX_FMT_Y12:
-		case V4L2_PIX_FMT_SBGGR8:
-		case V4L2_PIX_FMT_SGBRG8:
-		case V4L2_PIX_FMT_SGRBG8:
-		case V4L2_PIX_FMT_SRGGB8:
-		case V4L2_PIX_FMT_SBGGR16:
-		case V4L2_PIX_FMT_SGBRG16:
-		case V4L2_PIX_FMT_SGRBG16:
-		case V4L2_PIX_FMT_SRGGB16:
-			cr1 |= BIT_PIXEL_BIT;
-			break;
-		}
 	}
 
 	imx7_csi_reg_write(csi, cr1, CSI_CSICR1);
 	imx7_csi_reg_write(csi, BIT_DMA_BURST_TYPE_RFF_INCR16, CSI_CSICR2);
-	imx7_csi_reg_write(csi, BIT_FRMCNT_RST, CSI_CSICR3);
+	imx7_csi_reg_write(csi, cr3, CSI_CSICR3);
 	imx7_csi_reg_write(csi, cr18, CSI_CSICR18);
 
 	imx7_csi_reg_write(csi, (width * out_pix->height) >> 2, CSI_CSIRXCNT);
@@ -1110,13 +1099,13 @@ static int imx7_csi_async_register(struct imx7_csi *csi)
 	struct fwnode_handle *ep;
 	int ret;
 
-	v4l2_async_notifier_init(&csi->notifier);
+	v4l2_async_nf_init(&csi->notifier);
 
 	ep = fwnode_graph_get_endpoint_by_id(dev_fwnode(csi->dev), 0, 0,
 					     FWNODE_GRAPH_ENDPOINT_NEXT);
 	if (ep) {
-		asd = v4l2_async_notifier_add_fwnode_remote_subdev(
-			&csi->notifier, ep, struct v4l2_async_subdev);
+		asd = v4l2_async_nf_add_fwnode_remote(&csi->notifier, ep,
+						      struct v4l2_async_subdev);
 
 		fwnode_handle_put(ep);
 
@@ -1130,7 +1119,7 @@ static int imx7_csi_async_register(struct imx7_csi *csi)
 
 	csi->notifier.ops = &imx7_csi_notify_ops;
 
-	ret = v4l2_async_subdev_notifier_register(&csi->sd, &csi->notifier);
+	ret = v4l2_async_subdev_nf_register(&csi->sd, &csi->notifier);
 	if (ret)
 		return ret;
 
@@ -1221,12 +1210,12 @@ static int imx7_csi_probe(struct platform_device *pdev)
 	return 0;
 
 subdev_notifier_cleanup:
-	v4l2_async_notifier_unregister(&csi->notifier);
-	v4l2_async_notifier_cleanup(&csi->notifier);
+	v4l2_async_nf_unregister(&csi->notifier);
+	v4l2_async_nf_cleanup(&csi->notifier);
 
 cleanup:
-	v4l2_async_notifier_unregister(&imxmd->notifier);
-	v4l2_async_notifier_cleanup(&imxmd->notifier);
+	v4l2_async_nf_unregister(&imxmd->notifier);
+	v4l2_async_nf_cleanup(&imxmd->notifier);
 	v4l2_device_unregister(&imxmd->v4l2_dev);
 	media_device_unregister(&imxmd->md);
 	media_device_cleanup(&imxmd->md);
@@ -1243,15 +1232,15 @@ static int imx7_csi_remove(struct platform_device *pdev)
 	struct imx7_csi *csi = v4l2_get_subdevdata(sd);
 	struct imx_media_dev *imxmd = csi->imxmd;
 
-	v4l2_async_notifier_unregister(&imxmd->notifier);
-	v4l2_async_notifier_cleanup(&imxmd->notifier);
+	v4l2_async_nf_unregister(&imxmd->notifier);
+	v4l2_async_nf_cleanup(&imxmd->notifier);
 
 	media_device_unregister(&imxmd->md);
 	v4l2_device_unregister(&imxmd->v4l2_dev);
 	media_device_cleanup(&imxmd->md);
 
-	v4l2_async_notifier_unregister(&csi->notifier);
-	v4l2_async_notifier_cleanup(&csi->notifier);
+	v4l2_async_nf_unregister(&csi->notifier);
+	v4l2_async_nf_cleanup(&csi->notifier);
 	v4l2_async_unregister_subdev(sd);
 
 	mutex_destroy(&csi->lock);

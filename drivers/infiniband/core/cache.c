@@ -33,6 +33,7 @@
  * SOFTWARE.
  */
 
+#include <linux/if_vlan.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
@@ -955,7 +956,7 @@ int rdma_query_gid(struct ib_device *device, u32 port_num,
 {
 	struct ib_gid_table *table;
 	unsigned long flags;
-	int res = -EINVAL;
+	int res;
 
 	if (!rdma_is_port_valid(device, port_num))
 		return -EINVAL;
@@ -963,9 +964,15 @@ int rdma_query_gid(struct ib_device *device, u32 port_num,
 	table = rdma_gid_table(device, port_num);
 	read_lock_irqsave(&table->rwlock, flags);
 
-	if (index < 0 || index >= table->sz ||
-	    !is_gid_entry_valid(table->data_vec[index]))
+	if (index < 0 || index >= table->sz) {
+		res = -EINVAL;
 		goto done;
+	}
+
+	if (!is_gid_entry_valid(table->data_vec[index])) {
+		res = -ENOENT;
+		goto done;
+	}
 
 	memcpy(gid, &table->data_vec[index]->attr.gid, sizeof(*gid));
 	res = 0;
@@ -1429,7 +1436,7 @@ int rdma_read_gid_l2_fields(const struct ib_gid_attr *attr,
 EXPORT_SYMBOL(rdma_read_gid_l2_fields);
 
 static int config_non_roce_gid_cache(struct ib_device *device,
-				     u32 port, int gid_tbl_len)
+				     u32 port, struct ib_port_attr *tprops)
 {
 	struct ib_gid_attr gid_attr = {};
 	struct ib_gid_table *table;
@@ -1441,7 +1448,7 @@ static int config_non_roce_gid_cache(struct ib_device *device,
 	table = rdma_gid_table(device, port);
 
 	mutex_lock(&table->lock);
-	for (i = 0; i < gid_tbl_len; ++i) {
+	for (i = 0; i < tprops->gid_tbl_len; ++i) {
 		if (!device->ops.query_gid)
 			continue;
 		ret = device->ops.query_gid(device, port, i, &gid_attr.gid);
@@ -1452,6 +1459,8 @@ static int config_non_roce_gid_cache(struct ib_device *device,
 			goto err;
 		}
 		gid_attr.index = i;
+		tprops->subnet_prefix =
+			be64_to_cpu(gid_attr.gid.global.subnet_prefix);
 		add_modify_gid(table, &gid_attr);
 	}
 err:
@@ -1484,7 +1493,7 @@ ib_cache_update(struct ib_device *device, u32 port, bool update_gids,
 
 	if (!rdma_protocol_roce(device, port) && update_gids) {
 		ret = config_non_roce_gid_cache(device, port,
-						tprops->gid_tbl_len);
+						tprops);
 		if (ret)
 			goto err;
 	}
@@ -1618,8 +1627,6 @@ int ib_cache_setup_one(struct ib_device *device)
 {
 	u32 p;
 	int err;
-
-	rwlock_init(&device->cache_lock);
 
 	err = gid_table_setup_one(device);
 	if (err)

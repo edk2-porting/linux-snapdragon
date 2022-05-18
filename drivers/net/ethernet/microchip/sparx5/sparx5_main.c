@@ -234,8 +234,7 @@ static int sparx5_create_targets(struct sparx5 *sparx5)
 		}
 		iomem[idx] = devm_ioremap(sparx5->dev,
 					  iores[idx]->start,
-					  iores[idx]->end - iores[idx]->start
-					  + 1);
+					  resource_size(iores[idx]));
 		if (!iomem[idx]) {
 			dev_err(sparx5->dev, "Unable to get switch registers: %s\n",
 				iores[idx]->name);
@@ -293,6 +292,33 @@ static int sparx5_create_port(struct sparx5 *sparx5,
 	spx5_port->phylink_config.dev = &spx5_port->ndev->dev;
 	spx5_port->phylink_config.type = PHYLINK_NETDEV;
 	spx5_port->phylink_config.pcs_poll = true;
+	spx5_port->phylink_config.mac_capabilities = MAC_ASYM_PAUSE |
+		MAC_SYM_PAUSE | MAC_10 | MAC_100 | MAC_1000FD |
+		MAC_2500FD | MAC_5000FD | MAC_10000FD | MAC_25000FD;
+
+	__set_bit(PHY_INTERFACE_MODE_SGMII,
+		  spx5_port->phylink_config.supported_interfaces);
+	__set_bit(PHY_INTERFACE_MODE_QSGMII,
+		  spx5_port->phylink_config.supported_interfaces);
+	__set_bit(PHY_INTERFACE_MODE_1000BASEX,
+		  spx5_port->phylink_config.supported_interfaces);
+	__set_bit(PHY_INTERFACE_MODE_2500BASEX,
+		  spx5_port->phylink_config.supported_interfaces);
+
+	if (spx5_port->conf.bandwidth == SPEED_5000 ||
+	    spx5_port->conf.bandwidth == SPEED_10000 ||
+	    spx5_port->conf.bandwidth == SPEED_25000)
+		__set_bit(PHY_INTERFACE_MODE_5GBASER,
+			  spx5_port->phylink_config.supported_interfaces);
+
+	if (spx5_port->conf.bandwidth == SPEED_10000 ||
+	    spx5_port->conf.bandwidth == SPEED_25000)
+		__set_bit(PHY_INTERFACE_MODE_10GBASER,
+			  spx5_port->phylink_config.supported_interfaces);
+
+	if (spx5_port->conf.bandwidth == SPEED_25000)
+		__set_bit(PHY_INTERFACE_MODE_25GBASER,
+			  spx5_port->phylink_config.supported_interfaces);
 
 	phylink = phylink_create(&spx5_port->phylink_config,
 				 of_fwnode_handle(config->node),
@@ -640,8 +666,23 @@ static int sparx5_start(struct sparx5 *sparx5)
 	sparx5_board_init(sparx5);
 	err = sparx5_register_notifier_blocks(sparx5);
 
-	/* Start register based INJ/XTR */
+	/* Start Frame DMA with fallback to register based INJ/XTR */
 	err = -ENXIO;
+	if (sparx5->fdma_irq >= 0) {
+		if (GCB_CHIP_ID_REV_ID_GET(sparx5->chip_id) > 0)
+			err = devm_request_threaded_irq(sparx5->dev,
+							sparx5->fdma_irq,
+							NULL,
+							sparx5_fdma_handler,
+							IRQF_ONESHOT,
+							"sparx5-fdma", sparx5);
+		if (!err)
+			err = sparx5_fdma_start(sparx5);
+		if (err)
+			sparx5->fdma_irq = -ENXIO;
+	} else {
+		sparx5->fdma_irq = -ENXIO;
+	}
 	if (err && sparx5->xtr_irq >= 0) {
 		err = devm_request_irq(sparx5->dev, sparx5->xtr_irq,
 				       sparx5_xtr_handler, IRQF_SHARED,
@@ -743,6 +784,7 @@ static int mchp_sparx5_probe(struct platform_device *pdev)
 			err = dev_err_probe(sparx5->dev, PTR_ERR(serdes),
 					    "port %u: missing serdes\n",
 					    portno);
+			of_node_put(portnp);
 			goto cleanup_config;
 		}
 		config->portno = portno;
@@ -766,6 +808,7 @@ static int mchp_sparx5_probe(struct platform_device *pdev)
 		sparx5->base_mac[5] = 0;
 	}
 
+	sparx5->fdma_irq = platform_get_irq_byname(sparx5->pdev, "fdma");
 	sparx5->xtr_irq = platform_get_irq_byname(sparx5->pdev, "xtr");
 
 	/* Read chip ID to check CPU interface */
@@ -824,6 +867,11 @@ static int mchp_sparx5_remove(struct platform_device *pdev)
 		disable_irq(sparx5->xtr_irq);
 		sparx5->xtr_irq = -ENXIO;
 	}
+	if (sparx5->fdma_irq) {
+		disable_irq(sparx5->fdma_irq);
+		sparx5->fdma_irq = -ENXIO;
+	}
+	sparx5_fdma_stop(sparx5);
 	sparx5_cleanup_ports(sparx5);
 	/* Unregister netdevs */
 	sparx5_unregister_notifier_blocks(sparx5);

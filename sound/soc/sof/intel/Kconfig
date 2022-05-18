@@ -84,6 +84,7 @@ if SND_SOC_SOF_PCI
 config SND_SOC_SOF_MERRIFIELD
 	tristate "SOF support for Tangier/Merrifield"
 	default SND_SOC_SOF_PCI
+	select SND_SOC_SOF_PCI_DEV
 	select SND_SOC_SOF_INTEL_ATOM_HIFI_EP
 	help
 	  This adds support for Sound Open Firmware for Intel(R) platforms
@@ -247,16 +248,6 @@ config SND_SOC_SOF_HDA_PROBES
 	  This option enables the data probing for Intel(R)
 	  Skylake and newer platforms.
 	  Say Y if you want to enable probes.
-	  If unsure, select "N".
-
-config SND_SOC_SOF_HDA_ALWAYS_ENABLE_DMI_L1
-	bool "SOF enable DMI Link L1"
-	help
-	  This option enables DMI L1 for both playback and capture
-	  and disables known workarounds for specific HDAudio platforms.
-	  Only use to look into power optimizations on platforms not
-	  affected by DMI L1 issues. This option is not recommended.
-	  Say Y if you want to enable DMI Link L1.
 	  If unsure, select "N".
 
 endif ## SND_SOC_SOF_HDA_COMMON

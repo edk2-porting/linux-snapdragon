@@ -91,6 +91,39 @@ config SND_HDA_PATCH_LOADER
 	  start up.  The "patch" file can be specified via patch module
 	  option, such as patch=hda-init.
 
+config SND_HDA_SCODEC_CS35L41
+	tristate
+
+config SND_HDA_SCODEC_CS35L41_I2C
+	tristate "Build CS35L41 HD-audio side codec support for I2C Bus"
+	depends on I2C
+	depends on ACPI
+	depends on SND_SOC
+	select SND_HDA_GENERIC
+	select SND_SOC_CS35L41_LIB
+	select SND_HDA_SCODEC_CS35L41
+	help
+	  Say Y or M here to include CS35L41 I2C HD-audio side codec support
+	  in snd-hda-intel driver, such as ALC287.
+
+comment "Set to Y if you want auto-loading the side codec driver"
+	depends on SND_HDA=y && SND_HDA_SCODEC_CS35L41_I2C=m
+
+config SND_HDA_SCODEC_CS35L41_SPI
+	tristate "Build CS35L41 HD-audio codec support for SPI Bus"
+	depends on SPI_MASTER
+	depends on ACPI
+	depends on SND_SOC
+	select SND_HDA_GENERIC
+	select SND_SOC_CS35L41_LIB
+	select SND_HDA_SCODEC_CS35L41
+	help
+	  Say Y or M here to include CS35L41 SPI HD-audio side codec support
+	  in snd-hda-intel driver, such as ALC287.
+
+comment "Set to Y if you want auto-loading the side codec driver"
+	depends on SND_HDA=y && SND_HDA_SCODEC_CS35L41_SPI=m
+
 config SND_HDA_CODEC_REALTEK
 	tristate "Build Realtek HD-audio codec support"
 	select SND_HDA_GENERIC
@@ -156,6 +189,16 @@ config SND_HDA_CODEC_CIRRUS
 
 comment "Set to Y if you want auto-loading the codec driver"
 	depends on SND_HDA=y && SND_HDA_CODEC_CIRRUS=m
+
+config SND_HDA_CODEC_CS8409
+	tristate "Build Cirrus Logic HDA bridge support"
+	select SND_HDA_GENERIC
+	help
+	  Say Y or M here to include Cirrus Logic HDA bridge support in
+	  snd-hda-intel driver, such as CS8409.
+
+comment "Set to Y if you want auto-loading the codec driver"
+	depends on SND_HDA=y && SND_HDA_CODEC_CS8409=m
 
 config SND_HDA_CODEC_CONEXANT
 	tristate "Build Conexant HD-audio codec support"

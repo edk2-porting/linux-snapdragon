@@ -213,11 +213,12 @@ static struct attribute *xfs_errortag_attrs[] = {
 	XFS_ERRORTAG_ATTR_LIST(ag_resv_fail),
 	NULL,
 };
+ATTRIBUTE_GROUPS(xfs_errortag);
 
 static struct kobj_type xfs_errortag_ktype = {
 	.release = xfs_sysfs_release,
 	.sysfs_ops = &xfs_errortag_sysfs_ops,
-	.default_attrs = xfs_errortag_attrs,
+	.default_groups = xfs_errortag_groups,
 };
 
 int
@@ -371,7 +372,7 @@ xfs_buf_corruption_error(
 
 	xfs_alert_tag(mp, XFS_PTAG_VERIFIER_ERROR,
 		  "Metadata corruption detected at %pS, %s block 0x%llx",
-		  fa, bp->b_ops->name, bp->b_bn);
+		  fa, bp->b_ops->name, xfs_buf_daddr(bp));
 
 	xfs_alert(mp, "Unmount and run xfs_repair");
 
@@ -402,7 +403,7 @@ xfs_buf_verifier_error(
 	xfs_alert_tag(mp, XFS_PTAG_VERIFIER_ERROR,
 		  "Metadata %s detected at %pS, %s block 0x%llx %s",
 		  bp->b_error == -EFSBADCRC ? "CRC error" : "corruption",
-		  fa, bp->b_ops->name, bp->b_bn, name);
+		  fa, bp->b_ops->name, xfs_buf_daddr(bp), name);
 
 	xfs_alert(mp, "Unmount and run xfs_repair");
 

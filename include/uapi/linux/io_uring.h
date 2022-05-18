@@ -44,6 +44,7 @@ struct io_uring_sqe {
 		__u32		splice_flags;
 		__u32		rename_flags;
 		__u32		unlink_flags;
+		__u32		hardlink_flags;
 	};
 	__u64	user_data;	/* data to be passed back at completion time */
 	/* pack this to avoid bogus arm OABI complaints */
@@ -55,7 +56,10 @@ struct io_uring_sqe {
 	} __attribute__((packed));
 	/* personality to use, if used */
 	__u16	personality;
-	__s32	splice_fd_in;
+	union {
+		__s32	splice_fd_in;
+		__u32	file_index;
+	};
 	__u64	__pad2[2];
 };
 
@@ -66,6 +70,7 @@ enum {
 	IOSQE_IO_HARDLINK_BIT,
 	IOSQE_ASYNC_BIT,
 	IOSQE_BUFFER_SELECT_BIT,
+	IOSQE_CQE_SKIP_SUCCESS_BIT,
 };
 
 /*
@@ -83,6 +88,8 @@ enum {
 #define IOSQE_ASYNC		(1U << IOSQE_ASYNC_BIT)
 /* select buffer from sqe->buf_group */
 #define IOSQE_BUFFER_SELECT	(1U << IOSQE_BUFFER_SELECT_BIT)
+/* don't post CQE if request succeeded */
+#define IOSQE_CQE_SKIP_SUCCESS	(1U << IOSQE_CQE_SKIP_SUCCESS_BIT)
 
 /*
  * io_uring_setup() flags
@@ -133,6 +140,9 @@ enum {
 	IORING_OP_SHUTDOWN,
 	IORING_OP_RENAMEAT,
 	IORING_OP_UNLINKAT,
+	IORING_OP_MKDIRAT,
+	IORING_OP_SYMLINKAT,
+	IORING_OP_LINKAT,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,
@@ -146,9 +156,14 @@ enum {
 /*
  * sqe->timeout_flags
  */
-#define IORING_TIMEOUT_ABS	(1U << 0)
-#define IORING_TIMEOUT_UPDATE	(1U << 1)
-
+#define IORING_TIMEOUT_ABS		(1U << 0)
+#define IORING_TIMEOUT_UPDATE		(1U << 1)
+#define IORING_TIMEOUT_BOOTTIME		(1U << 2)
+#define IORING_TIMEOUT_REALTIME		(1U << 3)
+#define IORING_LINK_TIMEOUT_UPDATE	(1U << 4)
+#define IORING_TIMEOUT_ETIME_SUCCESS	(1U << 5)
+#define IORING_TIMEOUT_CLOCK_MASK	(IORING_TIMEOUT_BOOTTIME | IORING_TIMEOUT_REALTIME)
+#define IORING_TIMEOUT_UPDATE_MASK	(IORING_TIMEOUT_UPDATE | IORING_LINK_TIMEOUT_UPDATE)
 /*
  * sqe->splice_flags
  * extends splice(2) flags
@@ -277,6 +292,8 @@ struct io_uring_params {
 #define IORING_FEAT_EXT_ARG		(1U << 8)
 #define IORING_FEAT_NATIVE_WORKERS	(1U << 9)
 #define IORING_FEAT_RSRC_TAGS		(1U << 10)
+#define IORING_FEAT_CQE_SKIP		(1U << 11)
+#define IORING_FEAT_LINKED_FILE		(1U << 12)
 
 /*
  * io_uring_register(2) opcodes and arguments
@@ -306,8 +323,17 @@ enum {
 	IORING_REGISTER_IOWQ_AFF		= 17,
 	IORING_UNREGISTER_IOWQ_AFF		= 18,
 
+	/* set/get max number of io-wq workers */
+	IORING_REGISTER_IOWQ_MAX_WORKERS	= 19,
+
 	/* this goes last */
 	IORING_REGISTER_LAST
+};
+
+/* io-wq worker categories */
+enum {
+	IO_WQ_BOUND,
+	IO_WQ_UNBOUND,
 };
 
 /* deprecated, see struct io_uring_rsrc_update */

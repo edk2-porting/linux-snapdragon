@@ -24,7 +24,7 @@ static bool iwl_pnvm_complete_fn(struct iwl_notif_wait_data *notif_wait,
 	struct iwl_pnvm_init_complete_ntfy *pnvm_ntf = (void *)pkt->data;
 
 	IWL_DEBUG_FW(trans,
-		     "PNVM complete notification received with status %d\n",
+		     "PNVM complete notification received with status 0x%0x\n",
 		     le32_to_cpu(pnvm_ntf->status));
 
 	return true;
@@ -162,7 +162,7 @@ done:
 		goto out;
 	}
 
-	IWL_INFO(trans, "loaded PNVM version 0x%0x\n", sha1);
+	IWL_INFO(trans, "loaded PNVM version %08x\n", sha1);
 
 	ret = iwl_trans_set_pnvm(trans, pnvm_data, size);
 out:
@@ -284,16 +284,19 @@ int iwl_pnvm_load(struct iwl_trans *trans,
 	/* First attempt to get the PNVM from BIOS */
 	package = iwl_uefi_get_pnvm(trans, &len);
 	if (!IS_ERR_OR_NULL(package)) {
-		data = kmemdup(package->data, len, GFP_KERNEL);
+		if (len >= sizeof(*package)) {
+			/* we need only the data */
+			len -= sizeof(*package);
+			data = kmemdup(package->data, len, GFP_KERNEL);
+		} else {
+			data = NULL;
+		}
 
 		/* free package regardless of whether kmemdup succeeded */
 		kfree(package);
 
-		if (data) {
-			/* we need only the data size */
-			len -= sizeof(*package);
+		if (data)
 			goto parse;
-		}
 	}
 
 	/* If it's not available, try from the filesystem */

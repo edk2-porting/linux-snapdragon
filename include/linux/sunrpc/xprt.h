@@ -139,6 +139,9 @@ struct rpc_xprt_ops {
 	void		(*rpcbind)(struct rpc_task *task);
 	void		(*set_port)(struct rpc_xprt *xprt, unsigned short port);
 	void		(*connect)(struct rpc_xprt *xprt, struct rpc_task *task);
+	int		(*get_srcaddr)(struct rpc_xprt *xprt, char *buf,
+				       size_t buflen);
+	unsigned short	(*get_srcport)(struct rpc_xprt *xprt);
 	int		(*buf_alloc)(struct rpc_task *task);
 	void		(*buf_free)(struct rpc_task *task);
 	void		(*prepare_request)(struct rpc_rqst *req);
@@ -288,7 +291,6 @@ struct rpc_xprt {
 	const char		*address_strings[RPC_DISPLAY_MAX];
 #if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
 	struct dentry		*debugfs;		/* debugfs directory */
-	atomic_t		inject_disconnect;
 #endif
 	struct rcu_head		rcu;
 	const struct xprt_class	*xprt_class;
@@ -502,22 +504,5 @@ static inline int xprt_test_and_set_binding(struct rpc_xprt *xprt)
 {
 	return test_and_set_bit(XPRT_BINDING, &xprt->state);
 }
-
-#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
-extern unsigned int rpc_inject_disconnect;
-static inline void xprt_inject_disconnect(struct rpc_xprt *xprt)
-{
-	if (!rpc_inject_disconnect)
-		return;
-	if (atomic_dec_return(&xprt->inject_disconnect))
-		return;
-	atomic_set(&xprt->inject_disconnect, rpc_inject_disconnect);
-	xprt->ops->inject_disconnect(xprt);
-}
-#else
-static inline void xprt_inject_disconnect(struct rpc_xprt *xprt)
-{
-}
-#endif
 
 #endif /* _LINUX_SUNRPC_XPRT_H */

@@ -714,7 +714,7 @@ static int aic32x4_setup_clocks(struct snd_soc_component *component,
 	unsigned long adc_clock_rate, dac_clock_rate;
 	int ret;
 
-	struct clk_bulk_data clocks[] = {
+	static struct clk_bulk_data clocks[] = {
 		{ .id = "pll" },
 		{ .id = "nadc" },
 		{ .id = "madc" },
@@ -878,7 +878,7 @@ static int aic32x4_set_bias_level(struct snd_soc_component *component,
 {
 	int ret;
 
-	struct clk_bulk_data clocks[] = {
+	static struct clk_bulk_data clocks[] = {
 		{ .id = "madc" },
 		{ .id = "mdac" },
 		{ .id = "bdiv" },
@@ -994,7 +994,7 @@ static int aic32x4_component_probe(struct snd_soc_component *component)
 	u32 tmp_reg;
 	int ret;
 
-	struct clk_bulk_data clocks[] = {
+	static struct clk_bulk_data clocks[] = {
 		{ .id = "codec_clkin" },
 		{ .id = "pll" },
 		{ .id = "bdiv" },
@@ -1144,7 +1144,7 @@ static int aic32x4_tas2505_component_probe(struct snd_soc_component *component)
 	u32 tmp_reg;
 	int ret;
 
-	struct clk_bulk_data clocks[] = {
+	static struct clk_bulk_data clocks[] = {
 		{ .id = "codec_clkin" },
 		{ .id = "pll" },
 		{ .id = "bdiv" },
@@ -1418,13 +1418,11 @@ err_disable_regulators:
 }
 EXPORT_SYMBOL(aic32x4_probe);
 
-int aic32x4_remove(struct device *dev)
+void aic32x4_remove(struct device *dev)
 {
 	struct aic32x4_priv *aic32x4 = dev_get_drvdata(dev);
 
 	aic32x4_disable_regulators(aic32x4);
-
-	return 0;
 }
 EXPORT_SYMBOL(aic32x4_remove);
 

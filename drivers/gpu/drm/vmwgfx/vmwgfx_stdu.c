@@ -33,7 +33,7 @@
 #include <drm/drm_vblank.h>
 
 #include "vmwgfx_kms.h"
-#include "device_include/svga3d_surfacedefs.h"
+#include "vmw_surface_cache.h"
 
 #define vmw_crtc_to_stdu(x) \
 	container_of(x, struct vmw_screen_target_display_unit, base.crtc)
@@ -1123,7 +1123,7 @@ vmw_stdu_primary_plane_prepare_fb(struct drm_plane *plane,
 		}
 
 		if (!vps->surf) {
-			ret = vmw_gb_surface_define(dev_priv, 0, &metadata,
+			ret = vmw_gb_surface_define(dev_priv, &metadata,
 						    &vps->surf);
 			if (ret != 0) {
 				DRM_ERROR("Couldn't allocate STDU surface.\n");
@@ -1872,8 +1872,8 @@ int vmw_kms_stdu_init_display(struct vmw_private *dev_priv)
 	int i, ret;
 
 
-	/* Do nothing if Screen Target support is turned off */
-	if (!VMWGFX_ENABLE_SCREEN_TARGET_OTABLE || !dev_priv->has_mob)
+	/* Do nothing if there's no support for MOBs */
+	if (!dev_priv->has_mob)
 		return -ENOSYS;
 
 	if (!(dev_priv->capabilities & SVGA_CAP_GBOBJECTS))
@@ -1889,14 +1889,13 @@ int vmw_kms_stdu_init_display(struct vmw_private *dev_priv)
 		ret = vmw_stdu_init(dev_priv, i);
 
 		if (unlikely(ret != 0)) {
-			DRM_ERROR("Failed to initialize STDU %d", i);
+			drm_err(&dev_priv->drm,
+				"Failed to initialize STDU %d", i);
 			return ret;
 		}
 	}
 
 	drm_mode_config_reset(dev);
-
-	DRM_INFO("Screen Target Display device initialized\n");
 
 	return 0;
 }

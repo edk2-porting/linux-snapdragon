@@ -178,9 +178,8 @@ int gfs2_statfs_init(struct gfs2_sbd *sdp)
 {
 	struct gfs2_inode *m_ip = GFS2_I(sdp->sd_statfs_inode);
 	struct gfs2_statfs_change_host *m_sc = &sdp->sd_statfs_master;
-	struct gfs2_inode *l_ip = GFS2_I(sdp->sd_sc_inode);
 	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
-	struct buffer_head *m_bh, *l_bh;
+	struct buffer_head *m_bh;
 	struct gfs2_holder gh;
 	int error;
 
@@ -199,21 +198,15 @@ int gfs2_statfs_init(struct gfs2_sbd *sdp)
 				      sizeof(struct gfs2_dinode));
 		spin_unlock(&sdp->sd_statfs_spin);
 	} else {
-		error = gfs2_meta_inode_buffer(l_ip, &l_bh);
-		if (error)
-			goto out_m_bh;
-
 		spin_lock(&sdp->sd_statfs_spin);
 		gfs2_statfs_change_in(m_sc, m_bh->b_data +
 				      sizeof(struct gfs2_dinode));
-		gfs2_statfs_change_in(l_sc, l_bh->b_data +
+		gfs2_statfs_change_in(l_sc, sdp->sd_sc_bh->b_data +
 				      sizeof(struct gfs2_dinode));
 		spin_unlock(&sdp->sd_statfs_spin);
 
-		brelse(l_bh);
 	}
 
-out_m_bh:
 	brelse(m_bh);
 out:
 	gfs2_glock_dq_uninit(&gh);
@@ -226,22 +219,17 @@ void gfs2_statfs_change(struct gfs2_sbd *sdp, s64 total, s64 free,
 	struct gfs2_inode *l_ip = GFS2_I(sdp->sd_sc_inode);
 	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
 	struct gfs2_statfs_change_host *m_sc = &sdp->sd_statfs_master;
-	struct buffer_head *l_bh;
 	s64 x, y;
 	int need_sync = 0;
-	int error;
 
-	error = gfs2_meta_inode_buffer(l_ip, &l_bh);
-	if (error)
-		return;
-
-	gfs2_trans_add_meta(l_ip->i_gl, l_bh);
+	gfs2_trans_add_meta(l_ip->i_gl, sdp->sd_sc_bh);
 
 	spin_lock(&sdp->sd_statfs_spin);
 	l_sc->sc_total += total;
 	l_sc->sc_free += free;
 	l_sc->sc_dinodes += dinodes;
-	gfs2_statfs_change_out(l_sc, l_bh->b_data + sizeof(struct gfs2_dinode));
+	gfs2_statfs_change_out(l_sc, sdp->sd_sc_bh->b_data +
+			       sizeof(struct gfs2_dinode));
 	if (sdp->sd_args.ar_statfs_percent) {
 		x = 100 * l_sc->sc_free;
 		y = m_sc->sc_free * sdp->sd_args.ar_statfs_percent;
@@ -250,20 +238,18 @@ void gfs2_statfs_change(struct gfs2_sbd *sdp, s64 total, s64 free,
 	}
 	spin_unlock(&sdp->sd_statfs_spin);
 
-	brelse(l_bh);
 	if (need_sync)
 		gfs2_wake_up_statfs(sdp);
 }
 
-void update_statfs(struct gfs2_sbd *sdp, struct buffer_head *m_bh,
-		   struct buffer_head *l_bh)
+void update_statfs(struct gfs2_sbd *sdp, struct buffer_head *m_bh)
 {
 	struct gfs2_inode *m_ip = GFS2_I(sdp->sd_statfs_inode);
 	struct gfs2_inode *l_ip = GFS2_I(sdp->sd_sc_inode);
 	struct gfs2_statfs_change_host *m_sc = &sdp->sd_statfs_master;
 	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
 
-	gfs2_trans_add_meta(l_ip->i_gl, l_bh);
+	gfs2_trans_add_meta(l_ip->i_gl, sdp->sd_sc_bh);
 	gfs2_trans_add_meta(m_ip->i_gl, m_bh);
 
 	spin_lock(&sdp->sd_statfs_spin);
@@ -271,7 +257,7 @@ void update_statfs(struct gfs2_sbd *sdp, struct buffer_head *m_bh,
 	m_sc->sc_free += l_sc->sc_free;
 	m_sc->sc_dinodes += l_sc->sc_dinodes;
 	memset(l_sc, 0, sizeof(struct gfs2_statfs_change));
-	memset(l_bh->b_data + sizeof(struct gfs2_dinode),
+	memset(sdp->sd_sc_bh->b_data + sizeof(struct gfs2_dinode),
 	       0, sizeof(struct gfs2_statfs_change));
 	gfs2_statfs_change_out(m_sc, m_bh->b_data + sizeof(struct gfs2_dinode));
 	spin_unlock(&sdp->sd_statfs_spin);
@@ -281,11 +267,10 @@ int gfs2_statfs_sync(struct super_block *sb, int type)
 {
 	struct gfs2_sbd *sdp = sb->s_fs_info;
 	struct gfs2_inode *m_ip = GFS2_I(sdp->sd_statfs_inode);
-	struct gfs2_inode *l_ip = GFS2_I(sdp->sd_sc_inode);
 	struct gfs2_statfs_change_host *m_sc = &sdp->sd_statfs_master;
 	struct gfs2_statfs_change_host *l_sc = &sdp->sd_statfs_local;
 	struct gfs2_holder gh;
-	struct buffer_head *m_bh, *l_bh;
+	struct buffer_head *m_bh;
 	int error;
 
 	error = gfs2_glock_nq_init(m_ip->i_gl, LM_ST_EXCLUSIVE, GL_NOCACHE,
@@ -306,21 +291,15 @@ int gfs2_statfs_sync(struct super_block *sb, int type)
 	}
 	spin_unlock(&sdp->sd_statfs_spin);
 
-	error = gfs2_meta_inode_buffer(l_ip, &l_bh);
+	error = gfs2_trans_begin(sdp, 2 * RES_DINODE, 0);
 	if (error)
 		goto out_bh;
 
-	error = gfs2_trans_begin(sdp, 2 * RES_DINODE, 0);
-	if (error)
-		goto out_bh2;
-
-	update_statfs(sdp, m_bh, l_bh);
+	update_statfs(sdp, m_bh);
 	sdp->sd_statfs_force_sync = 0;
 
 	gfs2_trans_end(sdp);
 
-out_bh2:
-	brelse(l_bh);
 out_bh:
 	brelse(m_bh);
 out_unlock:
@@ -626,6 +605,7 @@ restart:
 			gfs2_glock_dq_uninit(&sdp->sd_journal_gh);
 		if (gfs2_holder_initialized(&sdp->sd_jinode_gh))
 			gfs2_glock_dq_uninit(&sdp->sd_jinode_gh);
+		brelse(sdp->sd_sc_bh);
 		gfs2_glock_dq_uninit(&sdp->sd_sc_gh);
 		gfs2_glock_dq_uninit(&sdp->sd_qc_gh);
 		free_local_statfs_inodes(sdp);
@@ -967,7 +947,7 @@ static int gfs2_drop_inode(struct inode *inode)
 		gfs2_glock_hold(gl);
 		if (!gfs2_queue_delete_work(gl, 0))
 			gfs2_glock_queue_put(gl);
-		return false;
+		return 0;
 	}
 
 	return generic_drop_inode(inode);
@@ -1264,11 +1244,9 @@ static enum dinode_demise evict_should_delete(struct inode *inode,
 	if (ret)
 		return SHOULD_NOT_DELETE_DINODE;
 
-	if (test_bit(GIF_INVALID, &ip->i_flags)) {
-		ret = gfs2_inode_refresh(ip);
-		if (ret)
-			return SHOULD_NOT_DELETE_DINODE;
-	}
+	ret = gfs2_instantiate(gh);
+	if (ret)
+		return SHOULD_NOT_DELETE_DINODE;
 
 	/*
 	 * The inode may have been recreated in the meantime.
@@ -1418,17 +1396,10 @@ out:
 	truncate_inode_pages_final(&inode->i_data);
 	if (ip->i_qadata)
 		gfs2_assert_warn(sdp, ip->i_qadata->qa_ref == 0);
-	gfs2_rs_delete(ip, NULL);
+	gfs2_rs_deltree(&ip->i_res);
 	gfs2_ordered_del_inode(ip);
 	clear_inode(inode);
 	gfs2_dir_hash_inval(ip);
-	if (ip->i_gl) {
-		glock_clear_object(ip->i_gl, ip);
-		wait_on_bit_io(&ip->i_flags, GIF_GLOP_PENDING, TASK_UNINTERRUPTIBLE);
-		gfs2_glock_add_to_lru(ip->i_gl);
-		gfs2_glock_put_eventually(ip->i_gl);
-		ip->i_gl = NULL;
-	}
 	if (gfs2_holder_initialized(&ip->i_iopen_gh)) {
 		struct gfs2_glock *gl = ip->i_iopen_gh.gh_gl;
 
@@ -1440,6 +1411,13 @@ out:
 		gfs2_glock_hold(gl);
 		gfs2_holder_uninit(&ip->i_iopen_gh);
 		gfs2_glock_put_eventually(gl);
+	}
+	if (ip->i_gl) {
+		glock_clear_object(ip->i_gl, ip);
+		wait_on_bit_io(&ip->i_flags, GIF_GLOP_PENDING, TASK_UNINTERRUPTIBLE);
+		gfs2_glock_add_to_lru(ip->i_gl);
+		gfs2_glock_put_eventually(ip->i_gl);
+		ip->i_gl = NULL;
 	}
 }
 

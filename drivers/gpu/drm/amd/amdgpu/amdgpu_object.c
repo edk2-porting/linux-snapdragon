@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/dma-buf.h>
 
+#include <drm/drm_drv.h>
 #include <drm/amdgpu_drm.h>
 #include <drm/drm_cache.h>
 #include "amdgpu.h"
@@ -695,43 +696,9 @@ int amdgpu_bo_create_vm(struct amdgpu_device *adev,
 }
 
 /**
- * amdgpu_bo_validate - validate an &amdgpu_bo buffer object
- * @bo: pointer to the buffer object
- *
- * Sets placement according to domain; and changes placement and caching
- * policy of the buffer object according to the placement.
- * This is used for validating shadow bos.  It calls ttm_bo_validate() to
- * make sure the buffer is resident where it needs to be.
- *
- * Returns:
- * 0 for success or a negative error code on failure.
- */
-int amdgpu_bo_validate(struct amdgpu_bo *bo)
-{
-	struct ttm_operation_ctx ctx = { false, false };
-	uint32_t domain;
-	int r;
-
-	if (bo->tbo.pin_count)
-		return 0;
-
-	domain = bo->preferred_domains;
-
-retry:
-	amdgpu_bo_placement_from_domain(bo, domain);
-	r = ttm_bo_validate(&bo->tbo, &bo->placement, &ctx);
-	if (unlikely(r == -ENOMEM) && domain != bo->allowed_domains) {
-		domain = bo->allowed_domains;
-		goto retry;
-	}
-
-	return r;
-}
-
-/**
  * amdgpu_bo_add_to_shadow_list - add a BO to the shadow list
  *
- * @bo: BO that will be inserted into the shadow list
+ * @vmbo: BO that will be inserted into the shadow list
  *
  * Insert a BO to the shadow list.
  */
@@ -913,7 +880,7 @@ int amdgpu_bo_pin_restricted(struct amdgpu_bo *bo, u32 domain,
 		return -EINVAL;
 
 	/* A shared bo cannot be migrated to VRAM */
-	if (bo->prime_shared_count || bo->tbo.base.import_attach) {
+	if (bo->tbo.base.import_attach) {
 		if (domain & AMDGPU_GEM_DOMAIN_GTT)
 			domain = AMDGPU_GEM_DOMAIN_GTT;
 		else
@@ -947,7 +914,7 @@ int amdgpu_bo_pin_restricted(struct amdgpu_bo *bo, u32 domain,
 	/* This assumes only APU display buffers are pinned with (VRAM|GTT).
 	 * See function amdgpu_display_supported_domains()
 	 */
-	domain = amdgpu_bo_get_preferred_pin_domain(adev, domain);
+	domain = amdgpu_bo_get_preferred_domain(adev, domain);
 
 	if (bo->tbo.base.import_attach)
 		dma_buf_pin(bo->tbo.base.import_attach);
@@ -1038,29 +1005,6 @@ void amdgpu_bo_unpin(struct amdgpu_bo *bo)
 	}
 }
 
-/**
- * amdgpu_bo_evict_vram - evict VRAM buffers
- * @adev: amdgpu device object
- *
- * Evicts all VRAM buffers on the lru list of the memory type.
- * Mainly used for evicting vram at suspend time.
- *
- * Returns:
- * 0 for success or a negative error code on failure.
- */
-int amdgpu_bo_evict_vram(struct amdgpu_device *adev)
-{
-	struct ttm_resource_manager *man;
-
-	if (adev->in_s3 && (adev->flags & AMD_IS_APU)) {
-		/* No need to evict vram on APUs for suspend to ram */
-		return 0;
-	}
-
-	man = ttm_manager_type(&adev->mman.bdev, TTM_PL_VRAM);
-	return ttm_resource_manager_evict_all(&adev->mman.bdev, man);
-}
-
 static const char *amdgpu_vram_names[] = {
 	"UNKNOWN",
 	"GDDR1",
@@ -1089,8 +1033,13 @@ int amdgpu_bo_init(struct amdgpu_device *adev)
 	/* On A+A platform, VRAM can be mapped as WB */
 	if (!adev->gmc.xgmi.connected_to_cpu) {
 		/* reserve PAT memory space to WC for VRAM */
-		arch_io_reserve_memtype_wc(adev->gmc.aper_base,
+		int r = arch_io_reserve_memtype_wc(adev->gmc.aper_base,
 				adev->gmc.aper_size);
+
+		if (r) {
+			DRM_ERROR("Unable to set WC memtype for the aperture base\n");
+			return r;
+		}
 
 		/* Add an MTRR for the VRAM */
 		adev->gmc.vram_mtrr = arch_phys_wc_add(adev->gmc.aper_base,
@@ -1113,7 +1062,18 @@ int amdgpu_bo_init(struct amdgpu_device *adev)
  */
 void amdgpu_bo_fini(struct amdgpu_device *adev)
 {
+	int idx;
+
 	amdgpu_ttm_fini(adev);
+
+	if (drm_dev_enter(adev_to_drm(adev), &idx)) {
+
+		if (!adev->gmc.xgmi.connected_to_cpu) {
+			arch_phys_wc_del(adev->gmc.vram_mtrr);
+			arch_io_free_memtype_wc(adev->gmc.aper_base, adev->gmc.aper_size);
+		}
+		drm_dev_exit(idx);
+	}
 }
 
 /**
@@ -1331,7 +1291,7 @@ void amdgpu_bo_release_notify(struct ttm_buffer_object *bo)
 	abo = ttm_to_amdgpu_bo(bo);
 
 	if (abo->kfd_bo)
-		amdgpu_amdkfd_unreserve_memory_limit(abo);
+		amdgpu_amdkfd_release_notify(abo);
 
 	/* We only remove the fence if the resv has individualized. */
 	WARN_ON_ONCE(bo->type == ttm_bo_type_kernel
@@ -1343,7 +1303,8 @@ void amdgpu_bo_release_notify(struct ttm_buffer_object *bo)
 	    !(abo->flags & AMDGPU_GEM_CREATE_VRAM_WIPE_ON_RELEASE))
 		return;
 
-	dma_resv_lock(bo->base.resv, NULL);
+	if (WARN_ON_ONCE(!dma_resv_trylock(bo->base.resv)))
+		return;
 
 	r = amdgpu_fill_buffer(abo, AMDGPU_POISON, bo->base.resv, &fence);
 	if (!WARN_ON(r)) {
@@ -1518,14 +1479,14 @@ u64 amdgpu_bo_gpu_offset_no_check(struct amdgpu_bo *bo)
 }
 
 /**
- * amdgpu_bo_get_preferred_pin_domain - get preferred domain for scanout
+ * amdgpu_bo_get_preferred_domain - get preferred domain
  * @adev: amdgpu device object
  * @domain: allowed :ref:`memory domains <amdgpu_memory_domains>`
  *
  * Returns:
- * Which of the allowed domains is preferred for pinning the BO for scanout.
+ * Which of the allowed domains is preferred for allocating the BO.
  */
-uint32_t amdgpu_bo_get_preferred_pin_domain(struct amdgpu_device *adev,
+uint32_t amdgpu_bo_get_preferred_domain(struct amdgpu_device *adev,
 					    uint32_t domain)
 {
 	if (domain == (AMDGPU_GEM_DOMAIN_VRAM | AMDGPU_GEM_DOMAIN_GTT)) {

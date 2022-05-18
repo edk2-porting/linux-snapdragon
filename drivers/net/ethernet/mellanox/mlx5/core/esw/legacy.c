@@ -11,6 +11,7 @@
 #include "mlx5_core.h"
 #include "eswitch.h"
 #include "fs_core.h"
+#include "esw/qos.h"
 
 enum {
 	LEGACY_VEPA_PRIO = 0,
@@ -430,7 +431,7 @@ int mlx5_eswitch_set_vport_vlan(struct mlx5_eswitch *esw,
 	int err = 0;
 
 	if (!mlx5_esw_allowed(esw))
-		return -EPERM;
+		return vlan ? -EPERM : 0;
 
 	if (vlan || qos)
 		set_flags = SET_VLAN_STRIP | SET_VLAN_INSERT;
@@ -505,6 +506,23 @@ int mlx5_eswitch_set_vport_trust(struct mlx5_eswitch *esw,
 		esw_vport_change_handle_locked(evport);
 
 unlock:
+	mutex_unlock(&esw->state_lock);
+	return err;
+}
+
+int mlx5_eswitch_set_vport_rate(struct mlx5_eswitch *esw, u16 vport,
+				u32 max_rate, u32 min_rate)
+{
+	struct mlx5_vport *evport = mlx5_eswitch_get_vport(esw, vport);
+	int err;
+
+	if (!mlx5_esw_allowed(esw))
+		return -EPERM;
+	if (IS_ERR(evport))
+		return PTR_ERR(evport);
+
+	mutex_lock(&esw->state_lock);
+	err = mlx5_esw_qos_set_vport_rate(esw, evport, max_rate, min_rate);
 	mutex_unlock(&esw->state_lock);
 	return err;
 }

@@ -123,6 +123,17 @@ static inline unsigned int cpumask_first(const struct cpumask *srcp)
 	return 0;
 }
 
+static inline unsigned int cpumask_first_zero(const struct cpumask *srcp)
+{
+	return 0;
+}
+
+static inline unsigned int cpumask_first_and(const struct cpumask *srcp1,
+					     const struct cpumask *srcp2)
+{
+	return 0;
+}
+
 static inline unsigned int cpumask_last(const struct cpumask *srcp)
 {
 	return 0;
@@ -167,7 +178,7 @@ static inline unsigned int cpumask_local_spread(unsigned int i, int node)
 
 static inline int cpumask_any_and_distribute(const struct cpumask *src1p,
 					     const struct cpumask *src2p) {
-	return cpumask_next_and(-1, src1p, src2p);
+	return cpumask_first_and(src1p, src2p);
 }
 
 static inline int cpumask_any_distribute(const struct cpumask *srcp)
@@ -193,6 +204,30 @@ static inline int cpumask_any_distribute(const struct cpumask *srcp)
 static inline unsigned int cpumask_first(const struct cpumask *srcp)
 {
 	return find_first_bit(cpumask_bits(srcp), nr_cpumask_bits);
+}
+
+/**
+ * cpumask_first_zero - get the first unset cpu in a cpumask
+ * @srcp: the cpumask pointer
+ *
+ * Returns >= nr_cpu_ids if all cpus are set.
+ */
+static inline unsigned int cpumask_first_zero(const struct cpumask *srcp)
+{
+	return find_first_zero_bit(cpumask_bits(srcp), nr_cpumask_bits);
+}
+
+/**
+ * cpumask_first_and - return the first cpu from *srcp1 & *srcp2
+ * @src1p: the first input
+ * @src2p: the second input
+ *
+ * Returns >= nr_cpu_ids if no cpus set in both.  See also cpumask_next_and().
+ */
+static inline
+unsigned int cpumask_first_and(const struct cpumask *srcp1, const struct cpumask *srcp2)
+{
+	return find_first_and_bit(cpumask_bits(srcp1), cpumask_bits(srcp2), nr_cpumask_bits);
 }
 
 /**
@@ -586,15 +621,6 @@ static inline void cpumask_copy(struct cpumask *dstp,
 #define cpumask_any(srcp) cpumask_first(srcp)
 
 /**
- * cpumask_first_and - return the first cpu from *srcp1 & *srcp2
- * @src1p: the first input
- * @src2p: the second input
- *
- * Returns >= nr_cpu_ids if no cpus set in both.  See also cpumask_next_and().
- */
-#define cpumask_first_and(src1p, src2p) cpumask_next_and(-1, (src1p), (src2p))
-
-/**
  * cpumask_any_and - pick a "random" cpu from *mask1 & *mask2
  * @mask1: the first input cpumask
  * @mask2: the second input cpumask
@@ -981,6 +1007,45 @@ cpumap_print_to_pagebuf(bool list, char *buf, const struct cpumask *mask)
 {
 	return bitmap_print_to_pagebuf(list, buf, cpumask_bits(mask),
 				      nr_cpu_ids);
+}
+
+/**
+ * cpumap_print_bitmask_to_buf  - copies the cpumask into the buffer as
+ *	hex values of cpumask
+ *
+ * @buf: the buffer to copy into
+ * @mask: the cpumask to copy
+ * @off: in the string from which we are copying, we copy to @buf
+ * @count: the maximum number of bytes to print
+ *
+ * The function prints the cpumask into the buffer as hex values of
+ * cpumask; Typically used by bin_attribute to export cpumask bitmask
+ * ABI.
+ *
+ * Returns the length of how many bytes have been copied, excluding
+ * terminating '\0'.
+ */
+static inline ssize_t
+cpumap_print_bitmask_to_buf(char *buf, const struct cpumask *mask,
+		loff_t off, size_t count)
+{
+	return bitmap_print_bitmask_to_buf(buf, cpumask_bits(mask),
+				   nr_cpu_ids, off, count) - 1;
+}
+
+/**
+ * cpumap_print_list_to_buf  - copies the cpumask into the buffer as
+ *	comma-separated list of cpus
+ *
+ * Everything is same with the above cpumap_print_bitmask_to_buf()
+ * except the print format.
+ */
+static inline ssize_t
+cpumap_print_list_to_buf(char *buf, const struct cpumask *mask,
+		loff_t off, size_t count)
+{
+	return bitmap_print_list_to_buf(buf, cpumask_bits(mask),
+				   nr_cpu_ids, off, count) - 1;
 }
 
 #if NR_CPUS <= BITS_PER_LONG

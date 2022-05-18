@@ -117,7 +117,7 @@
 
 #define DW_IC_ERR_TX_ABRT	0x1
 
-#define DW_IC_TAR_10BITADDR_MASTER BIT(12)
+#define DW_IC_TAR_10BITADDR_MASTER	BIT(12)
 
 #define DW_IC_COMP_PARAM_1_SPEED_MODE_HIGH	(BIT(2) | BIT(3))
 #define DW_IC_COMP_PARAM_1_SPEED_MODE_MASK	GENMASK(3, 2)
@@ -191,23 +191,26 @@ struct reset_control;
  * @cmd_complete: tx completion indicator
  * @clk: input reference clock
  * @pclk: clock required to access the registers
+ * @rst: optional reset for the controller
  * @slave: represent an I2C slave device
+ * @get_clk_rate_khz: callback to retrieve IP specific bus speed
  * @cmd_err: run time hadware error code
  * @msgs: points to an array of messages currently being transferred
  * @msgs_num: the number of elements in msgs
- * @msg_write_idx: the element index of the current tx message in the msgs
- *	array
+ * @msg_write_idx: the element index of the current tx message in the msgs array
  * @tx_buf_len: the length of the current tx buffer
  * @tx_buf: the current tx buffer
- * @msg_read_idx: the element index of the current rx message in the msgs
- *	array
+ * @msg_read_idx: the element index of the current rx message in the msgs array
  * @rx_buf_len: the length of the current rx buffer
  * @rx_buf: the current rx buffer
  * @msg_err: error status of the current transfer
  * @status: i2c master status, one of STATUS_*
  * @abort_source: copy of the TX_ABRT_SOURCE register
  * @irq: interrupt number for the i2c master
+ * @flags: platform specific flags like type of IO accessors or model
  * @adapter: i2c subsystem adapter node
+ * @functionality: I2C_FUNC_* ORed bits to reflect what controller does support
+ * @master_cfg: configuration for the master device
  * @slave_cfg: configuration for the slave device
  * @tx_fifo_depth: depth of the hardware tx fifo
  * @rx_fifo_depth: depth of the hardware rx fifo
@@ -228,7 +231,9 @@ struct reset_control;
  * @disable: function to disable the controller
  * @disable_int: function to disable all interrupts
  * @init: function to initialize the I2C hardware
+ * @set_sda_hold_time: callback to retrieve IP specific SDA hold timing
  * @mode: operation mode - DW_IC_MASTER or DW_IC_SLAVE
+ * @rinfo: I²C GPIO recovery information
  * @suspended: set to true if the controller is suspended
  *
  * HCNT and LCNT parameters can be used if the platform knows more accurate
@@ -245,7 +250,7 @@ struct dw_i2c_dev {
 	struct clk		*clk;
 	struct clk		*pclk;
 	struct reset_control	*rst;
-	struct i2c_client		*slave;
+	struct i2c_client	*slave;
 	u32			(*get_clk_rate_khz) (struct dw_i2c_dev *dev);
 	int			cmd_err;
 	struct i2c_msg		*msgs;

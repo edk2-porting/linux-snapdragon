@@ -15,6 +15,7 @@
 #include "util/symbol.h"
 #include "util/thread.h"
 #include "util/trace-event.h"
+#include "util/env.h"
 #include "util/evlist.h"
 #include "util/evsel.h"
 #include "util/evsel_fprintf.h"
@@ -122,6 +123,7 @@ enum perf_output_field {
 	PERF_OUTPUT_TOD             = 1ULL << 32,
 	PERF_OUTPUT_DATA_PAGE_SIZE  = 1ULL << 33,
 	PERF_OUTPUT_CODE_PAGE_SIZE  = 1ULL << 34,
+	PERF_OUTPUT_INS_LAT         = 1ULL << 35,
 };
 
 struct perf_script {
@@ -188,6 +190,7 @@ struct output_option {
 	{.str = "tod", .field = PERF_OUTPUT_TOD},
 	{.str = "data_page_size", .field = PERF_OUTPUT_DATA_PAGE_SIZE},
 	{.str = "code_page_size", .field = PERF_OUTPUT_CODE_PAGE_SIZE},
+	{.str = "ins_lat", .field = PERF_OUTPUT_INS_LAT},
 };
 
 enum {
@@ -262,7 +265,8 @@ static struct {
 			      PERF_OUTPUT_DSO | PERF_OUTPUT_PERIOD |
 			      PERF_OUTPUT_ADDR | PERF_OUTPUT_DATA_SRC |
 			      PERF_OUTPUT_WEIGHT | PERF_OUTPUT_PHYS_ADDR |
-			      PERF_OUTPUT_DATA_PAGE_SIZE | PERF_OUTPUT_CODE_PAGE_SIZE,
+			      PERF_OUTPUT_DATA_PAGE_SIZE | PERF_OUTPUT_CODE_PAGE_SIZE |
+			      PERF_OUTPUT_INS_LAT,
 
 		.invalid_fields = PERF_OUTPUT_TRACE | PERF_OUTPUT_BPF_OUTPUT,
 	},
@@ -368,16 +372,6 @@ static inline int output_type(unsigned int type)
 	return OUTPUT_TYPE_OTHER;
 }
 
-static inline unsigned int attr_type(unsigned int type)
-{
-	switch (type) {
-	case OUTPUT_TYPE_SYNTH:
-		return PERF_TYPE_SYNTH;
-	default:
-		return type;
-	}
-}
-
 static bool output_set_by_user(void)
 {
 	int j;
@@ -465,11 +459,11 @@ static int evsel__check_attr(struct evsel *evsel, struct perf_session *session)
 		return -EINVAL;
 
 	if (PRINT_FIELD(DATA_SRC) &&
-	    evsel__check_stype(evsel, PERF_SAMPLE_DATA_SRC, "DATA_SRC", PERF_OUTPUT_DATA_SRC))
+	    evsel__do_check_stype(evsel, PERF_SAMPLE_DATA_SRC, "DATA_SRC", PERF_OUTPUT_DATA_SRC, allow_user_set))
 		return -EINVAL;
 
 	if (PRINT_FIELD(WEIGHT) &&
-	    evsel__check_stype(evsel, PERF_SAMPLE_WEIGHT, "WEIGHT", PERF_OUTPUT_WEIGHT))
+	    evsel__do_check_stype(evsel, PERF_SAMPLE_WEIGHT_TYPE, "WEIGHT", PERF_OUTPUT_WEIGHT, allow_user_set))
 		return -EINVAL;
 
 	if (PRINT_FIELD(SYM) &&
@@ -521,7 +515,7 @@ static int evsel__check_attr(struct evsel *evsel, struct perf_session *session)
 		return -EINVAL;
 
 	if (PRINT_FIELD(PHYS_ADDR) &&
-	    evsel__check_stype(evsel, PERF_SAMPLE_PHYS_ADDR, "PHYS_ADDR", PERF_OUTPUT_PHYS_ADDR))
+	    evsel__do_check_stype(evsel, PERF_SAMPLE_PHYS_ADDR, "PHYS_ADDR", PERF_OUTPUT_PHYS_ADDR, allow_user_set))
 		return -EINVAL;
 
 	if (PRINT_FIELD(DATA_PAGE_SIZE) &&
@@ -530,6 +524,10 @@ static int evsel__check_attr(struct evsel *evsel, struct perf_session *session)
 
 	if (PRINT_FIELD(CODE_PAGE_SIZE) &&
 	    evsel__check_stype(evsel, PERF_SAMPLE_CODE_PAGE_SIZE, "CODE_PAGE_SIZE", PERF_OUTPUT_CODE_PAGE_SIZE))
+		return -EINVAL;
+
+	if (PRINT_FIELD(INS_LAT) &&
+	    evsel__check_stype(evsel, PERF_SAMPLE_WEIGHT_STRUCT, "WEIGHT_STRUCT", PERF_OUTPUT_INS_LAT))
 		return -EINVAL;
 
 	return 0;
@@ -556,6 +554,18 @@ static void set_print_ip_opts(struct perf_event_attr *attr)
 		output[type].print_ip_opts |= EVSEL__PRINT_SRCLINE;
 }
 
+static struct evsel *find_first_output_type(struct evlist *evlist,
+					    unsigned int type)
+{
+	struct evsel *evsel;
+
+	evlist__for_each_entry(evlist, evsel) {
+		if (output_type(evsel->core.attr.type) == (int)type)
+			return evsel;
+	}
+	return NULL;
+}
+
 /*
  * verify all user requested events exist and the samples
  * have the expected data
@@ -567,7 +577,7 @@ static int perf_session__check_output_opt(struct perf_session *session)
 	struct evsel *evsel;
 
 	for (j = 0; j < OUTPUT_TYPE_MAX; ++j) {
-		evsel = perf_session__find_first_evtype(session, attr_type(j));
+		evsel = find_first_output_type(session->evlist, j);
 
 		/*
 		 * even if fields is set to 0 (ie., show nothing) event must
@@ -639,7 +649,7 @@ out:
 	return 0;
 }
 
-static int perf_sample__fprintf_regs(struct regs_dump *regs, uint64_t mask,
+static int perf_sample__fprintf_regs(struct regs_dump *regs, uint64_t mask, const char *arch,
 				     FILE *fp)
 {
 	unsigned i = 0, r;
@@ -652,7 +662,7 @@ static int perf_sample__fprintf_regs(struct regs_dump *regs, uint64_t mask,
 
 	for_each_set_bit(r, (unsigned long *) &mask, sizeof(mask) * 8) {
 		u64 val = regs->regs[i++];
-		printed += fprintf(fp, "%5s:0x%"PRIx64" ", perf_reg_name(r), val);
+		printed += fprintf(fp, "%5s:0x%"PRIx64" ", perf_reg_name(r, arch), val);
 	}
 
 	return printed;
@@ -709,17 +719,17 @@ tod_scnprintf(struct perf_script *script, char *buf, int buflen,
 }
 
 static int perf_sample__fprintf_iregs(struct perf_sample *sample,
-				      struct perf_event_attr *attr, FILE *fp)
+				      struct perf_event_attr *attr, const char *arch, FILE *fp)
 {
 	return perf_sample__fprintf_regs(&sample->intr_regs,
-					 attr->sample_regs_intr, fp);
+					 attr->sample_regs_intr, arch, fp);
 }
 
 static int perf_sample__fprintf_uregs(struct perf_sample *sample,
-				      struct perf_event_attr *attr, FILE *fp)
+				      struct perf_event_attr *attr, const char *arch, FILE *fp)
 {
 	return perf_sample__fprintf_regs(&sample->user_regs,
-					 attr->sample_regs_user, fp);
+					 attr->sample_regs_user, arch, fp);
 }
 
 static int perf_sample__fprintf_start(struct perf_script *script,
@@ -1991,6 +2001,7 @@ static void process_event(struct perf_script *script,
 	struct evsel_script *es = evsel->priv;
 	FILE *fp = es->fp;
 	char str[PAGE_SIZE_NAME_LEN];
+	const char *arch = perf_env__arch(machine->env);
 
 	if (output[type].fields == 0)
 		return;
@@ -2037,6 +2048,9 @@ static void process_event(struct perf_script *script,
 	if (PRINT_FIELD(WEIGHT))
 		fprintf(fp, "%16" PRIu64, sample->weight);
 
+	if (PRINT_FIELD(INS_LAT))
+		fprintf(fp, "%16" PRIu16, sample->ins_lat);
+
 	if (PRINT_FIELD(IP)) {
 		struct callchain_cursor *cursor = NULL;
 
@@ -2054,10 +2068,10 @@ static void process_event(struct perf_script *script,
 	}
 
 	if (PRINT_FIELD(IREGS))
-		perf_sample__fprintf_iregs(sample, attr, fp);
+		perf_sample__fprintf_iregs(sample, attr, arch, fp);
 
 	if (PRINT_FIELD(UREGS))
-		perf_sample__fprintf_uregs(sample, attr, fp);
+		perf_sample__fprintf_uregs(sample, attr, arch, fp);
 
 	if (PRINT_FIELD(BRSTACK))
 		perf_sample__fprintf_brstack(sample, thread, attr, fp);
@@ -2101,8 +2115,8 @@ static struct scripting_ops	*scripting_ops;
 static void __process_stat(struct evsel *counter, u64 tstamp)
 {
 	int nthreads = perf_thread_map__nr(counter->core.threads);
-	int ncpus = evsel__nr_cpus(counter);
-	int cpu, thread;
+	int idx, thread;
+	struct perf_cpu cpu;
 	static int header_printed;
 
 	if (counter->core.system_wide)
@@ -2115,13 +2129,13 @@ static void __process_stat(struct evsel *counter, u64 tstamp)
 	}
 
 	for (thread = 0; thread < nthreads; thread++) {
-		for (cpu = 0; cpu < ncpus; cpu++) {
+		perf_cpu_map__for_each_cpu(cpu, idx, evsel__cpus(counter)) {
 			struct perf_counts_values *counts;
 
-			counts = perf_counts(counter->counts, cpu, thread);
+			counts = perf_counts(counter->counts, idx, thread);
 
 			printf("%3d %8d %15" PRIu64 " %15" PRIu64 " %15" PRIu64 " %15" PRIu64 " %s\n",
-				counter->core.cpus->map[cpu],
+				cpu.cpu,
 				perf_thread_map__pid(counter->core.threads, thread),
 				counts->val,
 				counts->ena,
@@ -2212,7 +2226,7 @@ static int process_sample_event(struct perf_tool *tool,
 	if (filter_cpu(sample))
 		goto out_put;
 
-	if (machine__resolve(machine, &al, sample) < 0) {
+	if (!al.thread && machine__resolve(machine, &al, sample) < 0) {
 		pr_err("problem processing %d event, skipping it.\n",
 		       event->header.type);
 		ret = -1;
@@ -2304,7 +2318,7 @@ static int process_attr(struct perf_tool *tool, union perf_event *event,
 	 * on events sample_type.
 	 */
 	sample_type = evlist__combined_sample_type(evlist);
-	callchain_param_setup(sample_type);
+	callchain_param_setup(sample_type, perf_env__arch((*pevlist)->env));
 
 	/* Enable fields for callchain entries */
 	if (symbol_conf.use_callchain &&
@@ -2461,7 +2475,7 @@ static int process_switch_event(struct perf_tool *tool,
 	if (perf_event__process_switch(tool, event, sample, machine) < 0)
 		return -1;
 
-	if (scripting_ops && scripting_ops->process_switch)
+	if (scripting_ops && scripting_ops->process_switch && !filter_cpu(sample))
 		scripting_ops->process_switch(event, sample, machine);
 
 	if (!script->show_switch_events)
@@ -2490,6 +2504,17 @@ process_lost_event(struct perf_tool *tool,
 {
 	return print_event(tool, event, sample, machine, sample->pid,
 			   sample->tid);
+}
+
+static int
+process_throttle_event(struct perf_tool *tool __maybe_unused,
+		       union perf_event *event,
+		       struct perf_sample *sample,
+		       struct machine *machine)
+{
+	if (scripting_ops && scripting_ops->process_throttle)
+		scripting_ops->process_throttle(event, sample, machine);
+	return 0;
 }
 
 static int
@@ -3294,7 +3319,7 @@ int find_scripts(char **scripts_array, char **scripts_path_array, int num,
 	char *temp;
 	int i = 0;
 
-	session = perf_session__new(&data, false, NULL);
+	session = perf_session__new(&data, NULL);
 	if (IS_ERR(session))
 		return PTR_ERR(session);
 
@@ -3443,16 +3468,7 @@ static void script__setup_sample_type(struct perf_script *script)
 	struct perf_session *session = script->session;
 	u64 sample_type = evlist__combined_sample_type(session->evlist);
 
-	if (symbol_conf.use_callchain || symbol_conf.cumulate_callchain) {
-		if ((sample_type & PERF_SAMPLE_REGS_USER) &&
-		    (sample_type & PERF_SAMPLE_STACK_USER)) {
-			callchain_param.record_mode = CALLCHAIN_DWARF;
-			dwarf_callchain_users = true;
-		} else if (sample_type & PERF_SAMPLE_BRANCH_STACK)
-			callchain_param.record_mode = CALLCHAIN_LBR;
-		else
-			callchain_param.record_mode = CALLCHAIN_FP;
-	}
+	callchain_param_setup(sample_type, perf_env__arch(session->machines.host.env));
 
 	if (script->stitch_lbr && (callchain_param.record_mode != CALLCHAIN_LBR)) {
 		pr_warning("Can't find LBR callchain. Switch off --stitch-lbr.\n"
@@ -3652,6 +3668,8 @@ int cmd_script(int argc, const char **argv)
 			.stat_config	 = process_stat_config_event,
 			.thread_map	 = process_thread_map_event,
 			.cpu_map	 = process_cpu_map_event,
+			.throttle	 = process_throttle_event,
+			.unthrottle	 = process_throttle_event,
 			.ordered_events	 = true,
 			.ordering_requires_timestamps = true,
 		},
@@ -3700,7 +3718,7 @@ int cmd_script(int argc, const char **argv)
 		     "addr,symoff,srcline,period,iregs,uregs,brstack,"
 		     "brstacksym,flags,bpf-output,brstackinsn,brstackoff,"
 		     "callindent,insn,insnlen,synth,phys_addr,metric,misc,ipc,tod,"
-		     "data_page_size,code_page_size",
+		     "data_page_size,code_page_size,ins_lat",
 		     parse_output_fields),
 	OPT_BOOLEAN('a', "all-cpus", &system_wide,
 		    "system-wide collection from all CPUs"),
@@ -3820,6 +3838,9 @@ int cmd_script(int argc, const char **argv)
 
 	data.path  = input_name;
 	data.force = symbol_conf.force;
+
+	if (symbol__validate_sym_arguments())
+		return -1;
 
 	if (argc > 1 && !strncmp(argv[0], "rec", strlen("rec"))) {
 		rec_script_path = get_script_path(argv[1], RECORD_SUFFIX);
@@ -4007,7 +4028,7 @@ script_found:
 		use_browser = 0;
 	}
 
-	session = perf_session__new(&data, false, &script.tool);
+	session = perf_session__new(&data, &script.tool);
 	if (IS_ERR(session))
 		return PTR_ERR(session);
 
@@ -4024,11 +4045,15 @@ script_found:
 		goto out_delete;
 
 	uname(&uts);
-	if (data.is_pipe ||  /* assume pipe_mode indicates native_arch */
-	    !strcmp(uts.machine, session->header.env.arch) ||
-	    (!strcmp(uts.machine, "x86_64") &&
-	     !strcmp(session->header.env.arch, "i386")))
+	if (data.is_pipe) { /* Assume pipe_mode indicates native_arch */
 		native_arch = true;
+	} else if (session->header.env.arch) {
+		if (!strcmp(uts.machine, session->header.env.arch))
+			native_arch = true;
+		else if (!strcmp(uts.machine, "x86_64") &&
+			 !strcmp(session->header.env.arch, "i386"))
+			native_arch = true;
+	}
 
 	script.session = session;
 	script__setup_sample_type(&script);

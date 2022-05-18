@@ -27,7 +27,7 @@ struct xchk_meta_ops {
 	int		(*repair)(struct xfs_scrub *);
 
 	/* Decide if we even have this piece of metadata. */
-	bool		(*has)(struct xfs_sb *);
+	bool		(*has)(struct xfs_mount *);
 
 	/* type describing required/allowed inputs */
 	enum xchk_type	type;
@@ -35,7 +35,6 @@ struct xchk_meta_ops {
 
 /* Buffer pointers and btree cursors for an entire AG. */
 struct xchk_ag {
-	xfs_agnumber_t		agno;
 	struct xfs_perag	*pag;
 
 	/* AG btree roots */
@@ -89,7 +88,6 @@ struct xfs_scrub {
 
 /* XCHK state flags grow up from zero, XREP state flags grown down from 2^31 */
 #define XCHK_TRY_HARDER		(1 << 0)  /* can't get resources, try again */
-#define XCHK_HAS_QUOTAOFFLOCK	(1 << 1)  /* we hold the quotaoff lock */
 #define XCHK_REAPING_DISABLED	(1 << 2)  /* background block reaping paused */
 #define XREP_ALREADY_FIXED	(1 << 31) /* checking our repair work */
 

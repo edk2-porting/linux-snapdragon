@@ -158,6 +158,22 @@ const struct address_space_operations secretmem_aops = {
 	.isolate_page	= secretmem_isolate_page,
 };
 
+static int secretmem_setattr(struct user_namespace *mnt_userns,
+			     struct dentry *dentry, struct iattr *iattr)
+{
+	struct inode *inode = d_inode(dentry);
+	unsigned int ia_valid = iattr->ia_valid;
+
+	if ((ia_valid & ATTR_SIZE) && inode->i_size)
+		return -EINVAL;
+
+	return simple_setattr(mnt_userns, dentry, iattr);
+}
+
+static const struct inode_operations secretmem_iops = {
+	.setattr = secretmem_setattr,
+};
+
 static struct vfsmount *secretmem_mnt;
 
 static struct file *secretmem_file_create(unsigned long flags)
@@ -177,6 +193,7 @@ static struct file *secretmem_file_create(unsigned long flags)
 	mapping_set_gfp_mask(inode->i_mapping, GFP_HIGHUSER);
 	mapping_set_unevictable(inode->i_mapping);
 
+	inode->i_op = &secretmem_iops;
 	inode->i_mapping->a_ops = &secretmem_aops;
 
 	/* pretend we are a normal file with zero size */
@@ -203,6 +220,8 @@ SYSCALL_DEFINE1(memfd_secret, unsigned int, flags)
 
 	if (flags & ~(SECRETMEM_FLAGS_MASK | O_CLOEXEC))
 		return -EINVAL;
+	if (atomic_read(&secretmem_users) < 0)
+		return -ENFILE;
 
 	fd = get_unused_fd_flags(flags & O_CLOEXEC);
 	if (fd < 0)
@@ -216,8 +235,8 @@ SYSCALL_DEFINE1(memfd_secret, unsigned int, flags)
 
 	file->f_flags |= O_LARGEFILE;
 
-	fd_install(fd, file);
 	atomic_inc(&secretmem_users);
+	fd_install(fd, file);
 	return fd;
 
 err_put_fd:

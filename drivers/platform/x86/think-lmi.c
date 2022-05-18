@@ -20,6 +20,10 @@
 #include "firmware_attributes_class.h"
 #include "think-lmi.h"
 
+static bool debug_support;
+module_param(debug_support, bool, 0444);
+MODULE_PARM_DESC(debug_support, "Enable debug command support");
+
 /*
  * Name:
  *  Lenovo_BiosSetting
@@ -116,8 +120,31 @@
  */
 #define LENOVO_GET_BIOS_SELECTIONS_GUID	"7364651A-132F-4FE7-ADAA-40C6C7EE2E3B"
 
+/*
+ * Name:
+ *  Lenovo_DebugCmdGUID
+ * Description
+ *  Debug entry GUID method for entering debug commands to the BIOS
+ */
+#define LENOVO_DEBUG_CMD_GUID "7FF47003-3B6C-4E5E-A227-E979824A85D1"
+
+/*
+ * Name:
+ *  Lenovo_OpcodeIF
+ * Description:
+ *  Opcode interface which provides the ability to set multiple
+ *  parameters and then trigger an action with a final command.
+ *  This is particularly useful for simplifying setting passwords.
+ *  With this support comes the ability to set System, HDD and NVMe
+ *  passwords.
+ *  This is currently available on ThinkCenter and ThinkStations platforms
+ */
+#define LENOVO_OPCODE_IF_GUID "DFDDEF2C-57D4-48ce-B196-0FB787D90836"
+
 #define TLMI_POP_PWD (1 << 0)
 #define TLMI_PAP_PWD (1 << 1)
+#define TLMI_HDD_PWD (1 << 2)
+#define TLMI_SYS_PWD (1 << 3)
 #define to_tlmi_pwd_setting(kobj)  container_of(kobj, struct tlmi_pwd_setting, kobj)
 #define to_tlmi_attr_setting(kobj)  container_of(kobj, struct tlmi_attr_setting, kobj)
 
@@ -132,6 +159,10 @@ static const struct tlmi_err_codes tlmi_errs[] = {
 static const char * const encoding_options[] = {
 	[TLMI_ENCODING_ASCII] = "ascii",
 	[TLMI_ENCODING_SCANCODE] = "scancode",
+};
+static const char * const level_options[] = {
+	[TLMI_LEVEL_USER] = "user",
+	[TLMI_LEVEL_MASTER] = "master",
 };
 static struct think_lmi tlmi_priv;
 static struct class *fw_attr_class;
@@ -221,6 +252,7 @@ static int tlmi_get_pwd_settings(struct tlmi_pwdcfg *pwdcfg)
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
 	const union acpi_object *obj;
 	acpi_status status;
+	int copy_size;
 
 	if (!tlmi_priv.can_get_password_settings)
 		return -EOPNOTSUPP;
@@ -241,14 +273,21 @@ static int tlmi_get_pwd_settings(struct tlmi_pwdcfg *pwdcfg)
 	 * The size of thinkpad_wmi_pcfg on ThinkStation is larger than ThinkPad.
 	 * To make the driver compatible on different brands, we permit it to get
 	 * the data in below case.
+	 * Settings must have at minimum the core fields available
 	 */
-	if (obj->buffer.length < sizeof(struct tlmi_pwdcfg)) {
+	if (obj->buffer.length < sizeof(struct tlmi_pwdcfg_core)) {
 		pr_warn("Unknown pwdcfg buffer length %d\n", obj->buffer.length);
 		kfree(obj);
 		return -EIO;
 	}
-	memcpy(pwdcfg, obj->buffer.pointer, sizeof(struct tlmi_pwdcfg));
+
+	copy_size = obj->buffer.length < sizeof(struct tlmi_pwdcfg) ?
+		obj->buffer.length : sizeof(struct tlmi_pwdcfg);
+	memcpy(pwdcfg, obj->buffer.pointer, copy_size);
 	kfree(obj);
+
+	if (WARN_ON(pwdcfg->core.max_length >= TLMI_PWD_BUFSIZE))
+		pwdcfg->core.max_length = TLMI_PWD_BUFSIZE - 1;
 	return 0;
 }
 
@@ -256,6 +295,20 @@ static int tlmi_save_bios_settings(const char *password)
 {
 	return tlmi_simple_call(LENOVO_SAVE_BIOS_SETTINGS_GUID,
 				password);
+}
+
+static int tlmi_opcode_setting(char *setting, const char *value)
+{
+	char *opcode_str;
+	int ret;
+
+	opcode_str = kasprintf(GFP_KERNEL, "%s:%s;", setting, value);
+	if (!opcode_str)
+		return -ENOMEM;
+
+	ret = tlmi_simple_call(LENOVO_OPCODE_IF_GUID, opcode_str);
+	kfree(opcode_str);
+	return ret;
 }
 
 static int tlmi_setting(int item, char **value, const char *guid_string)
@@ -358,16 +411,54 @@ static ssize_t new_password_store(struct kobject *kobj,
 		goto out;
 	}
 
-	/* Format: 'PasswordType,CurrentPw,NewPw,Encoding,KbdLang;' */
-	auth_str = kasprintf(GFP_KERNEL, "%s,%s,%s,%s,%s;",
-		 setting->pwd_type, setting->password, new_pwd,
-		 encoding_options[setting->encoding], setting->kbdlang);
-	if (!auth_str) {
-		ret = -ENOMEM;
-		goto out;
+	/* If opcode support is present use that interface */
+	if (tlmi_priv.opcode_support) {
+		char pwd_type[8];
+
+		/* Special handling required for HDD and NVMe passwords */
+		if (setting == tlmi_priv.pwd_hdd) {
+			if (setting->level == TLMI_LEVEL_USER)
+				sprintf(pwd_type, "uhdp%d", setting->index);
+			else
+				sprintf(pwd_type, "mhdp%d", setting->index);
+		} else if (setting == tlmi_priv.pwd_nvme) {
+			if (setting->level == TLMI_LEVEL_USER)
+				sprintf(pwd_type, "unvp%d", setting->index);
+			else
+				sprintf(pwd_type, "mnvp%d", setting->index);
+		} else {
+			sprintf(pwd_type, "%s", setting->pwd_type);
+		}
+
+		ret = tlmi_opcode_setting("WmiOpcodePasswordType", pwd_type);
+		if (ret)
+			goto out;
+
+		if (tlmi_priv.pwd_admin->valid) {
+			ret = tlmi_opcode_setting("WmiOpcodePasswordAdmin",
+					tlmi_priv.pwd_admin->password);
+			if (ret)
+				goto out;
+		}
+		ret = tlmi_opcode_setting("WmiOpcodePasswordCurrent01", setting->password);
+		if (ret)
+			goto out;
+		ret = tlmi_opcode_setting("WmiOpcodePasswordNew01", new_pwd);
+		if (ret)
+			goto out;
+		ret = tlmi_simple_call(LENOVO_OPCODE_IF_GUID, "WmiOpcodePasswordSetUpdate;");
+	} else {
+		/* Format: 'PasswordType,CurrentPw,NewPw,Encoding,KbdLang;' */
+		auth_str = kasprintf(GFP_KERNEL, "%s,%s,%s,%s,%s;",
+				setting->pwd_type, setting->password, new_pwd,
+				encoding_options[setting->encoding], setting->kbdlang);
+		if (!auth_str) {
+			ret = -ENOMEM;
+			goto out;
+		}
+		ret = tlmi_simple_call(LENOVO_SET_BIOS_PASSWORD_GUID, auth_str);
+		kfree(auth_str);
 	}
-	ret = tlmi_simple_call(LENOVO_SET_BIOS_PASSWORD_GUID, auth_str);
-	kfree(auth_str);
 out:
 	kfree(new_pwd);
 	return ret ?: count;
@@ -463,6 +554,75 @@ static ssize_t role_show(struct kobject *kobj, struct kobj_attribute *attr,
 }
 static struct kobj_attribute auth_role = __ATTR_RO(role);
 
+static ssize_t index_show(struct kobject *kobj, struct kobj_attribute *attr,
+			 char *buf)
+{
+	struct tlmi_pwd_setting *setting = to_tlmi_pwd_setting(kobj);
+
+	return sysfs_emit(buf, "%d\n", setting->index);
+}
+
+static ssize_t index_store(struct kobject *kobj,
+				  struct kobj_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct tlmi_pwd_setting *setting = to_tlmi_pwd_setting(kobj);
+	int err, val;
+
+	err = kstrtoint(buf, 10, &val);
+	if (err < 0)
+		return err;
+
+	if (val < 0 || val > TLMI_INDEX_MAX)
+		return -EINVAL;
+
+	setting->index = val;
+	return count;
+}
+
+static struct kobj_attribute auth_index = __ATTR_RW(index);
+
+static ssize_t level_show(struct kobject *kobj, struct kobj_attribute *attr,
+			 char *buf)
+{
+	struct tlmi_pwd_setting *setting = to_tlmi_pwd_setting(kobj);
+
+	return sysfs_emit(buf, "%s\n", level_options[setting->level]);
+}
+
+static ssize_t level_store(struct kobject *kobj,
+				  struct kobj_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct tlmi_pwd_setting *setting = to_tlmi_pwd_setting(kobj);
+	int i;
+
+	/* Scan for a matching profile */
+	i = sysfs_match_string(level_options, buf);
+	if (i < 0)
+		return -EINVAL;
+
+	setting->level = i;
+	return count;
+}
+
+static struct kobj_attribute auth_level = __ATTR_RW(level);
+
+static umode_t auth_attr_is_visible(struct kobject *kobj,
+					     struct attribute *attr, int n)
+{
+	struct tlmi_pwd_setting *setting = to_tlmi_pwd_setting(kobj);
+
+	/*We only want to display level and index settings on HDD/NVMe */
+	if ((attr == (struct attribute *)&auth_index) ||
+			(attr == (struct attribute *)&auth_level)) {
+		if ((setting == tlmi_priv.pwd_hdd) || (setting == tlmi_priv.pwd_nvme))
+			return attr->mode;
+		return 0;
+	}
+	return attr->mode;
+}
+
 static struct attribute *auth_attrs[] = {
 	&auth_is_pass_set.attr,
 	&auth_min_pass_length.attr,
@@ -473,10 +633,13 @@ static struct attribute *auth_attrs[] = {
 	&auth_mechanism.attr,
 	&auth_encoding.attr,
 	&auth_kbdlang.attr,
+	&auth_index.attr,
+	&auth_level.attr,
 	NULL
 };
 
 static const struct attribute_group auth_attr_group = {
+	.is_visible = auth_attr_is_visible,
 	.attrs = auth_attrs,
 };
 
@@ -660,6 +823,64 @@ static ssize_t pending_reboot_show(struct kobject *kobj, struct kobj_attribute *
 
 static struct kobj_attribute pending_reboot = __ATTR_RO(pending_reboot);
 
+/* ---- Debug interface--------------------------------------------------------- */
+static ssize_t debug_cmd_store(struct kobject *kobj, struct kobj_attribute *attr,
+				const char *buf, size_t count)
+{
+	char *set_str = NULL, *new_setting = NULL;
+	char *auth_str = NULL;
+	char *p;
+	int ret;
+
+	if (!tlmi_priv.can_debug_cmd)
+		return -EOPNOTSUPP;
+
+	new_setting = kstrdup(buf, GFP_KERNEL);
+	if (!new_setting)
+		return -ENOMEM;
+
+	/* Strip out CR if one is present */
+	p = strchrnul(new_setting, '\n');
+	*p = '\0';
+
+	if (tlmi_priv.pwd_admin->valid && tlmi_priv.pwd_admin->password[0]) {
+		auth_str = kasprintf(GFP_KERNEL, "%s,%s,%s;",
+				tlmi_priv.pwd_admin->password,
+				encoding_options[tlmi_priv.pwd_admin->encoding],
+				tlmi_priv.pwd_admin->kbdlang);
+		if (!auth_str) {
+			ret = -ENOMEM;
+			goto out;
+		}
+	}
+
+	if (auth_str)
+		set_str = kasprintf(GFP_KERNEL, "%s,%s", new_setting, auth_str);
+	else
+		set_str = kasprintf(GFP_KERNEL, "%s;", new_setting);
+	if (!set_str) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	ret = tlmi_simple_call(LENOVO_DEBUG_CMD_GUID, set_str);
+	if (ret)
+		goto out;
+
+	if (!ret && !tlmi_priv.pending_changes) {
+		tlmi_priv.pending_changes = true;
+		/* let userland know it may need to check reboot pending again */
+		kobject_uevent(&tlmi_priv.class_dev->kobj, KOBJ_CHANGE);
+	}
+out:
+	kfree(auth_str);
+	kfree(set_str);
+	kfree(new_setting);
+	return ret ?: count;
+}
+
+static struct kobj_attribute debug_cmd = __ATTR_WO(debug_cmd);
+
 /* ---- Initialisation --------------------------------------------------------- */
 static void tlmi_release_attr(void)
 {
@@ -673,6 +894,8 @@ static void tlmi_release_attr(void)
 		}
 	}
 	sysfs_remove_file(&tlmi_priv.attribute_kset->kobj, &pending_reboot.attr);
+	if (tlmi_priv.can_debug_cmd && debug_support)
+		sysfs_remove_file(&tlmi_priv.attribute_kset->kobj, &debug_cmd.attr);
 	kset_unregister(tlmi_priv.attribute_kset);
 
 	/* Authentication structures */
@@ -680,6 +903,16 @@ static void tlmi_release_attr(void)
 	kobject_put(&tlmi_priv.pwd_admin->kobj);
 	sysfs_remove_group(&tlmi_priv.pwd_power->kobj, &auth_attr_group);
 	kobject_put(&tlmi_priv.pwd_power->kobj);
+
+	if (tlmi_priv.opcode_support) {
+		sysfs_remove_group(&tlmi_priv.pwd_system->kobj, &auth_attr_group);
+		kobject_put(&tlmi_priv.pwd_system->kobj);
+		sysfs_remove_group(&tlmi_priv.pwd_hdd->kobj, &auth_attr_group);
+		kobject_put(&tlmi_priv.pwd_hdd->kobj);
+		sysfs_remove_group(&tlmi_priv.pwd_nvme->kobj, &auth_attr_group);
+		kobject_put(&tlmi_priv.pwd_nvme->kobj);
+	}
+
 	kset_unregister(tlmi_priv.authentication_kset);
 }
 
@@ -737,6 +970,11 @@ static int tlmi_sysfs_init(void)
 	if (ret)
 		goto fail_create_attr;
 
+	if (tlmi_priv.can_debug_cmd && debug_support) {
+		ret = sysfs_create_file(&tlmi_priv.attribute_kset->kobj, &debug_cmd.attr);
+		if (ret)
+			goto fail_create_attr;
+	}
 	/* Create authentication entries */
 	tlmi_priv.authentication_kset = kset_create_and_add("authentication", NULL,
 								&tlmi_priv.class_dev->kobj);
@@ -754,13 +992,42 @@ static int tlmi_sysfs_init(void)
 		goto fail_create_attr;
 
 	tlmi_priv.pwd_power->kobj.kset = tlmi_priv.authentication_kset;
-	ret = kobject_add(&tlmi_priv.pwd_power->kobj, NULL, "%s", "System");
+	ret = kobject_add(&tlmi_priv.pwd_power->kobj, NULL, "%s", "Power-on");
 	if (ret)
 		goto fail_create_attr;
 
 	ret = sysfs_create_group(&tlmi_priv.pwd_power->kobj, &auth_attr_group);
 	if (ret)
 		goto fail_create_attr;
+
+	if (tlmi_priv.opcode_support) {
+		tlmi_priv.pwd_system->kobj.kset = tlmi_priv.authentication_kset;
+		ret = kobject_add(&tlmi_priv.pwd_system->kobj, NULL, "%s", "System");
+		if (ret)
+			goto fail_create_attr;
+
+		ret = sysfs_create_group(&tlmi_priv.pwd_system->kobj, &auth_attr_group);
+		if (ret)
+			goto fail_create_attr;
+
+		tlmi_priv.pwd_hdd->kobj.kset = tlmi_priv.authentication_kset;
+		ret = kobject_add(&tlmi_priv.pwd_hdd->kobj, NULL, "%s", "HDD");
+		if (ret)
+			goto fail_create_attr;
+
+		ret = sysfs_create_group(&tlmi_priv.pwd_hdd->kobj, &auth_attr_group);
+		if (ret)
+			goto fail_create_attr;
+
+		tlmi_priv.pwd_nvme->kobj.kset = tlmi_priv.authentication_kset;
+		ret = kobject_add(&tlmi_priv.pwd_nvme->kobj, NULL, "%s", "NVMe");
+		if (ret)
+			goto fail_create_attr;
+
+		ret = sysfs_create_group(&tlmi_priv.pwd_nvme->kobj, &auth_attr_group);
+		if (ret)
+			goto fail_create_attr;
+	}
 
 	return ret;
 
@@ -774,9 +1041,30 @@ fail_class_created:
 }
 
 /* ---- Base Driver -------------------------------------------------------- */
+static struct tlmi_pwd_setting *tlmi_create_auth(const char *pwd_type,
+			    const char *pwd_role)
+{
+	struct tlmi_pwd_setting *new_pwd;
+
+	new_pwd = kzalloc(sizeof(struct tlmi_pwd_setting), GFP_KERNEL);
+	if (!new_pwd)
+		return NULL;
+
+	strscpy(new_pwd->kbdlang, "us", TLMI_LANG_MAXLEN);
+	new_pwd->encoding = TLMI_ENCODING_ASCII;
+	new_pwd->pwd_type = pwd_type;
+	new_pwd->role = pwd_role;
+	new_pwd->minlen = tlmi_priv.pwdcfg.core.min_length;
+	new_pwd->maxlen = tlmi_priv.pwdcfg.core.max_length;
+	new_pwd->index = 0;
+
+	kobject_init(&new_pwd->kobj, &tlmi_pwd_setting_ktype);
+
+	return new_pwd;
+}
+
 static int tlmi_analyze(void)
 {
-	struct tlmi_pwdcfg pwdcfg;
 	acpi_status status;
 	int i, ret;
 
@@ -793,6 +1081,12 @@ static int tlmi_analyze(void)
 	if (wmi_has_guid(LENOVO_BIOS_PASSWORD_SETTINGS_GUID))
 		tlmi_priv.can_get_password_settings = true;
 
+	if (wmi_has_guid(LENOVO_DEBUG_CMD_GUID))
+		tlmi_priv.can_debug_cmd = true;
+
+	if (wmi_has_guid(LENOVO_OPCODE_IF_GUID))
+		tlmi_priv.opcode_support = true;
+
 	/*
 	 * Try to find the number of valid settings of this machine
 	 * and use it to create sysfs attributes.
@@ -808,8 +1102,10 @@ static int tlmi_analyze(void)
 			break;
 		if (!item)
 			break;
-		if (!*item)
+		if (!*item) {
+			kfree(item);
 			continue;
+		}
 
 		/* It is not allowed to have '/' for file name. Convert it into '\'. */
 		strreplace(item, '/', '\\');
@@ -822,6 +1118,7 @@ static int tlmi_analyze(void)
 		setting = kzalloc(sizeof(*setting), GFP_KERNEL);
 		if (!setting) {
 			ret = -ENOMEM;
+			kfree(item);
 			goto fail_clear_attr;
 		}
 		setting->index = i;
@@ -836,54 +1133,73 @@ static int tlmi_analyze(void)
 		}
 		kobject_init(&setting->kobj, &tlmi_attr_setting_ktype);
 		tlmi_priv.setting[i] = setting;
-		tlmi_priv.settings_count++;
 		kfree(item);
 	}
 
 	/* Create password setting structure */
-	ret = tlmi_get_pwd_settings(&pwdcfg);
+	ret = tlmi_get_pwd_settings(&tlmi_priv.pwdcfg);
 	if (ret)
 		goto fail_clear_attr;
 
-	tlmi_priv.pwd_admin = kzalloc(sizeof(struct tlmi_pwd_setting), GFP_KERNEL);
-	if (!tlmi_priv.pwd_admin) {
-		ret = -ENOMEM;
+	/* All failures below boil down to kmalloc failures */
+	ret = -ENOMEM;
+
+	tlmi_priv.pwd_admin = tlmi_create_auth("pap", "bios-admin");
+	if (!tlmi_priv.pwd_admin)
 		goto fail_clear_attr;
-	}
-	strscpy(tlmi_priv.pwd_admin->kbdlang, "us", TLMI_LANG_MAXLEN);
-	tlmi_priv.pwd_admin->encoding = TLMI_ENCODING_ASCII;
-	tlmi_priv.pwd_admin->pwd_type = "pap";
-	tlmi_priv.pwd_admin->role = "bios-admin";
-	tlmi_priv.pwd_admin->minlen = pwdcfg.min_length;
-	if (WARN_ON(pwdcfg.max_length >= TLMI_PWD_BUFSIZE))
-		pwdcfg.max_length = TLMI_PWD_BUFSIZE - 1;
-	tlmi_priv.pwd_admin->maxlen = pwdcfg.max_length;
-	if (pwdcfg.password_state & TLMI_PAP_PWD)
+
+	if (tlmi_priv.pwdcfg.core.password_state & TLMI_PAP_PWD)
 		tlmi_priv.pwd_admin->valid = true;
 
-	kobject_init(&tlmi_priv.pwd_admin->kobj, &tlmi_pwd_setting_ktype);
+	tlmi_priv.pwd_power = tlmi_create_auth("pop", "power-on");
+	if (!tlmi_priv.pwd_power)
+		goto fail_clear_attr;
 
-	tlmi_priv.pwd_power = kzalloc(sizeof(struct tlmi_pwd_setting), GFP_KERNEL);
-	if (!tlmi_priv.pwd_power) {
-		ret = -ENOMEM;
-		goto fail_free_pwd_admin;
-	}
-	strscpy(tlmi_priv.pwd_power->kbdlang, "us", TLMI_LANG_MAXLEN);
-	tlmi_priv.pwd_power->encoding = TLMI_ENCODING_ASCII;
-	tlmi_priv.pwd_power->pwd_type = "pop";
-	tlmi_priv.pwd_power->role = "power-on";
-	tlmi_priv.pwd_power->minlen = pwdcfg.min_length;
-	tlmi_priv.pwd_power->maxlen = pwdcfg.max_length;
-
-	if (pwdcfg.password_state & TLMI_POP_PWD)
+	if (tlmi_priv.pwdcfg.core.password_state & TLMI_POP_PWD)
 		tlmi_priv.pwd_power->valid = true;
 
-	kobject_init(&tlmi_priv.pwd_power->kobj, &tlmi_pwd_setting_ktype);
+	if (tlmi_priv.opcode_support) {
+		tlmi_priv.pwd_system = tlmi_create_auth("sys", "system");
+		if (!tlmi_priv.pwd_system)
+			goto fail_clear_attr;
 
+		if (tlmi_priv.pwdcfg.core.password_state & TLMI_SYS_PWD)
+			tlmi_priv.pwd_system->valid = true;
+
+		tlmi_priv.pwd_hdd = tlmi_create_auth("hdd", "hdd");
+		if (!tlmi_priv.pwd_hdd)
+			goto fail_clear_attr;
+
+		tlmi_priv.pwd_nvme = tlmi_create_auth("nvm", "nvme");
+		if (!tlmi_priv.pwd_nvme)
+			goto fail_clear_attr;
+
+		if (tlmi_priv.pwdcfg.core.password_state & TLMI_HDD_PWD) {
+			/* Check if PWD is configured and set index to first drive found */
+			if (tlmi_priv.pwdcfg.ext.hdd_user_password ||
+					tlmi_priv.pwdcfg.ext.hdd_master_password) {
+				tlmi_priv.pwd_hdd->valid = true;
+				if (tlmi_priv.pwdcfg.ext.hdd_master_password)
+					tlmi_priv.pwd_hdd->index =
+						ffs(tlmi_priv.pwdcfg.ext.hdd_master_password) - 1;
+				else
+					tlmi_priv.pwd_hdd->index =
+						ffs(tlmi_priv.pwdcfg.ext.hdd_user_password) - 1;
+			}
+			if (tlmi_priv.pwdcfg.ext.nvme_user_password ||
+					tlmi_priv.pwdcfg.ext.nvme_master_password) {
+				tlmi_priv.pwd_nvme->valid = true;
+				if (tlmi_priv.pwdcfg.ext.nvme_master_password)
+					tlmi_priv.pwd_nvme->index =
+						ffs(tlmi_priv.pwdcfg.ext.nvme_master_password) - 1;
+				else
+					tlmi_priv.pwd_nvme->index =
+						ffs(tlmi_priv.pwdcfg.ext.nvme_user_password) - 1;
+			}
+		}
+	}
 	return 0;
 
-fail_free_pwd_admin:
-	kfree(tlmi_priv.pwd_admin);
 fail_clear_attr:
 	for (i = 0; i < TLMI_SETTINGS_COUNT; ++i) {
 		if (tlmi_priv.setting[i]) {
@@ -891,6 +1207,11 @@ fail_clear_attr:
 			kfree(tlmi_priv.setting[i]);
 		}
 	}
+	kfree(tlmi_priv.pwd_admin);
+	kfree(tlmi_priv.pwd_power);
+	kfree(tlmi_priv.pwd_system);
+	kfree(tlmi_priv.pwd_hdd);
+	kfree(tlmi_priv.pwd_nvme);
 	return ret;
 }
 
@@ -903,7 +1224,12 @@ static void tlmi_remove(struct wmi_device *wdev)
 
 static int tlmi_probe(struct wmi_device *wdev, const void *context)
 {
-	tlmi_analyze();
+	int ret;
+
+	ret = tlmi_analyze();
+	if (ret)
+		return ret;
+
 	return tlmi_sysfs_init();
 }
 

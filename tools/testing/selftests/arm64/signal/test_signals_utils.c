@@ -26,6 +26,7 @@ static int sig_copyctx = SIGTRAP;
 
 static char const *const feats_names[FMAX_END] = {
 	" SSBS ",
+	" SVE ",
 };
 
 #define MAX_FEATS_SZ	128
@@ -263,16 +264,21 @@ int test_init(struct tdescr *td)
 		 */
 		if (getauxval(AT_HWCAP) & HWCAP_SSBS)
 			td->feats_supported |= FEAT_SSBS;
-		if (feats_ok(td))
+		if (getauxval(AT_HWCAP) & HWCAP_SVE)
+			td->feats_supported |= FEAT_SVE;
+		if (feats_ok(td)) {
 			fprintf(stderr,
 				"Required Features: [%s] supported\n",
 				feats_to_string(td->feats_required &
 						td->feats_supported));
-		else
+		} else {
 			fprintf(stderr,
 				"Required Features: [%s] NOT supported\n",
 				feats_to_string(td->feats_required &
 						~td->feats_supported));
+			td->result = KSFT_SKIP;
+			return 0;
+		}
 	}
 
 	/* Perform test specific additional initialization */
@@ -304,14 +310,12 @@ int test_setup(struct tdescr *td)
 
 int test_run(struct tdescr *td)
 {
-	if (td->sig_trig) {
-		if (td->trigger)
-			return td->trigger(td);
-		else
-			return default_trigger(td);
-	} else {
+	if (td->trigger)
+		return td->trigger(td);
+	else if (td->sig_trig)
+		return default_trigger(td);
+	else
 		return td->run(td, NULL, NULL);
-	}
 }
 
 void test_result(struct tdescr *td)

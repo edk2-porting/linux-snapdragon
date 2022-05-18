@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: LGPL-2.1
 /*
- *   fs/cifs/inode.c
  *
  *   Copyright (C) International Business Machines  Corp., 2002,2010
  *   Author(s): Steve French (sfrench@us.ibm.com)
@@ -84,6 +83,7 @@ static void cifs_set_ops(struct inode *inode)
 static void
 cifs_revalidate_cache(struct inode *inode, struct cifs_fattr *fattr)
 {
+	struct cifs_fscache_inode_coherency_data cd;
 	struct cifsInodeInfo *cifs_i = CIFS_I(inode);
 
 	cifs_dbg(FYI, "%s: revalidating inode %llu\n",
@@ -114,6 +114,9 @@ cifs_revalidate_cache(struct inode *inode, struct cifs_fattr *fattr)
 	cifs_dbg(FYI, "%s: invalidating inode %llu mapping\n",
 		 __func__, cifs_i->uniqueid);
 	set_bit(CIFS_INO_INVALID_MAPPING, &cifs_i->flags);
+	/* Invalidate fscache cookie */
+	cifs_fscache_fill_coherency(&cifs_i->vfs_inode, &cd);
+	fscache_invalidate(cifs_inode_cookie(inode), &cd, i_size_read(inode), 0);
 }
 
 /*
@@ -953,6 +956,12 @@ cifs_get_inode_info(struct inode **inode,
 		rc = server->ops->query_path_info(xid, tcon, cifs_sb,
 						 full_path, tmp_data,
 						 &adjust_tz, &is_reparse_point);
+#ifdef CONFIG_CIFS_DFS_UPCALL
+		if (rc == -ENOENT && is_tcon_dfs(tcon))
+			rc = cifs_dfs_query_info_nonascii_quirk(xid, tcon,
+								cifs_sb,
+								full_path);
+#endif
 		data = tmp_data;
 	}
 
@@ -1299,10 +1308,7 @@ retry_iget5_locked:
 			inode->i_flags |= S_NOATIME | S_NOCMTIME;
 		if (inode->i_state & I_NEW) {
 			inode->i_ino = hash;
-#ifdef CONFIG_CIFS_FSCACHE
-			/* initialize per-inode cache cookie pointer */
-			CIFS_I(inode)->fscache = NULL;
-#endif
+			cifs_fscache_get_inode_cookie(inode);
 			unlock_new_inode(inode);
 		}
 	}
@@ -1356,11 +1362,6 @@ iget_no_retry:
 		inode = ERR_PTR(rc);
 		goto out;
 	}
-
-#ifdef CONFIG_CIFS_FSCACHE
-	/* populate tcon->resource_id */
-	tcon->resource_id = CIFS_I(inode)->uniqueid;
-#endif
 
 	if (rc && tcon->pipe) {
 		cifs_dbg(FYI, "ipc connection - fake read inode\n");
@@ -1625,7 +1626,7 @@ int cifs_unlink(struct inode *dir, struct dentry *dentry)
 		goto unlink_out;
 	}
 
-	cifs_close_deferred_file(CIFS_I(inode));
+	cifs_close_deferred_file_under_dentry(tcon, full_path);
 	if (cap_unix(tcon->ses) && (CIFS_UNIX_POSIX_PATH_OPS_CAP &
 				le64_to_cpu(tcon->fsUnixInfo.Capability))) {
 		rc = CIFSPOSIXDelFile(xid, tcon, full_path,
@@ -2114,9 +2115,9 @@ cifs_rename2(struct user_namespace *mnt_userns, struct inode *source_dir,
 		goto cifs_rename_exit;
 	}
 
-	cifs_close_deferred_file(CIFS_I(d_inode(source_dentry)));
+	cifs_close_deferred_file_under_dentry(tcon, from_name);
 	if (d_inode(target_dentry) != NULL)
-		cifs_close_deferred_file(CIFS_I(d_inode(target_dentry)));
+		cifs_close_deferred_file_under_dentry(tcon, to_name);
 
 	rc = cifs_do_rename(xid, source_dentry, from_name, target_dentry,
 			    to_name);
@@ -2273,7 +2274,6 @@ cifs_invalidate_mapping(struct inode *inode)
 				 __func__, inode);
 	}
 
-	cifs_fscache_reset_inode_cookie(inode);
 	return rc;
 }
 
@@ -2297,6 +2297,7 @@ cifs_revalidate_mapping(struct inode *inode)
 {
 	int rc;
 	unsigned long *flags = &CIFS_I(inode)->flags;
+	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 
 	/* swapfiles are not supposed to be shared */
 	if (IS_SWAPFILE(inode))
@@ -2308,11 +2309,16 @@ cifs_revalidate_mapping(struct inode *inode)
 		return rc;
 
 	if (test_and_clear_bit(CIFS_INO_INVALID_MAPPING, flags)) {
+		/* for cache=singleclient, do not invalidate */
+		if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_RW_CACHE)
+			goto skip_invalidate;
+
 		rc = cifs_invalidate_mapping(inode);
 		if (rc)
 			set_bit(CIFS_INO_INVALID_MAPPING, flags);
 	}
 
+skip_invalidate:
 	clear_bit_unlock(CIFS_INO_LOCK, flags);
 	smp_mb__after_atomic();
 	wake_up_bit(flags, CIFS_INO_LOCK);
@@ -2772,8 +2778,10 @@ cifs_setattr_unix(struct dentry *direntry, struct iattr *attrs)
 		goto out;
 
 	if ((attrs->ia_valid & ATTR_SIZE) &&
-	    attrs->ia_size != i_size_read(inode))
+	    attrs->ia_size != i_size_read(inode)) {
 		truncate_setsize(inode, attrs->ia_size);
+		fscache_resize_cookie(cifs_inode_cookie(inode), attrs->ia_size);
+	}
 
 	setattr_copy(&init_user_ns, inode, attrs);
 	mark_inode_dirty(inode);
@@ -2968,8 +2976,10 @@ cifs_setattr_nounix(struct dentry *direntry, struct iattr *attrs)
 		goto cifs_setattr_exit;
 
 	if ((attrs->ia_valid & ATTR_SIZE) &&
-	    attrs->ia_size != i_size_read(inode))
+	    attrs->ia_size != i_size_read(inode)) {
 		truncate_setsize(inode, attrs->ia_size);
+		fscache_resize_cookie(cifs_inode_cookie(inode), attrs->ia_size);
+	}
 
 	setattr_copy(&init_user_ns, inode, attrs);
 	mark_inode_dirty(inode);

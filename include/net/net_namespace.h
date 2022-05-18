@@ -23,7 +23,6 @@
 #include <net/netns/ieee802154_6lowpan.h>
 #include <net/netns/sctp.h>
 #include <net/netns/netfilter.h>
-#include <net/netns/x_tables.h>
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 #include <net/netns/conntrack.h>
 #endif
@@ -34,6 +33,8 @@
 #include <net/netns/xdp.h>
 #include <net/netns/smc.h>
 #include <net/netns/bpf.h>
+#include <net/netns/mctp.h>
+#include <net/net_trackers.h>
 #include <linux/ns_common.h>
 #include <linux/idr.h>
 #include <linux/skbuff.h>
@@ -87,6 +88,7 @@ struct net {
 	struct idr		netns_ids;
 
 	struct ns_common	ns;
+	struct ref_tracker_dir  refcnt_tracker;
 
 	struct list_head 	dev_base_head;
 	struct proc_dir_entry 	*proc_net;
@@ -132,7 +134,6 @@ struct net {
 #endif
 #ifdef CONFIG_NETFILTER
 	struct netns_nf		nf;
-	struct netns_xt		xt;
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	struct netns_ct		ct;
 #endif
@@ -166,6 +167,9 @@ struct net {
 #endif
 #ifdef CONFIG_XDP_SOCKETS
 	struct netns_xdp	xdp;
+#endif
+#if IS_ENABLED(CONFIG_MCTP)
+	struct netns_mctp	mctp;
 #endif
 #if IS_ENABLED(CONFIG_CRYPTO_USER)
 	struct sock		*crypto_nlsk;
@@ -238,6 +242,7 @@ void ipx_unregister_sysctl(void);
 #ifdef CONFIG_NET_NS
 void __put_net(struct net *net);
 
+/* Try using get_net_track() instead */
 static inline struct net *get_net(struct net *net)
 {
 	refcount_inc(&net->ns.count);
@@ -256,6 +261,7 @@ static inline struct net *maybe_get_net(struct net *net)
 	return net;
 }
 
+/* Try using put_net_track() instead */
 static inline void put_net(struct net *net)
 {
 	if (refcount_dec_and_test(&net->ns.count))
@@ -305,6 +311,36 @@ static inline int check_net(const struct net *net)
 #define net_drop_ns NULL
 #endif
 
+
+static inline void netns_tracker_alloc(struct net *net,
+				       netns_tracker *tracker, gfp_t gfp)
+{
+#ifdef CONFIG_NET_NS_REFCNT_TRACKER
+	ref_tracker_alloc(&net->refcnt_tracker, tracker, gfp);
+#endif
+}
+
+static inline void netns_tracker_free(struct net *net,
+				      netns_tracker *tracker)
+{
+#ifdef CONFIG_NET_NS_REFCNT_TRACKER
+       ref_tracker_free(&net->refcnt_tracker, tracker);
+#endif
+}
+
+static inline struct net *get_net_track(struct net *net,
+					netns_tracker *tracker, gfp_t gfp)
+{
+	get_net(net);
+	netns_tracker_alloc(net, tracker, gfp);
+	return net;
+}
+
+static inline void put_net_track(struct net *net, netns_tracker *tracker)
+{
+	netns_tracker_free(net, tracker);
+	put_net(net);
+}
 
 typedef struct {
 #ifdef CONFIG_NET_NS
@@ -476,5 +512,11 @@ static inline void fnhe_genid_bump(struct net *net)
 {
 	atomic_inc(&net->fnhe_genid);
 }
+
+#ifdef CONFIG_NET
+void net_ns_init(void);
+#else
+static inline void net_ns_init(void) {}
+#endif
 
 #endif /* __NET_NET_NAMESPACE_H */

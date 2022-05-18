@@ -55,7 +55,7 @@ static void i40iw_close(struct i40e_info *cdev_info, struct i40e_client *client,
 
 	iwdev = to_iwdev(ibdev);
 	if (reset)
-		iwdev->reset = true;
+		iwdev->rf->reset = true;
 
 	iwdev->iw_status = 0;
 	irdma_port_ibevent(iwdev);
@@ -77,6 +77,7 @@ static void i40iw_fill_device_info(struct irdma_device *iwdev, struct i40e_info 
 	rf->rdma_ver = IRDMA_GEN_1;
 	rf->gen_ops.request_reset = i40iw_request_reset;
 	rf->pcidev = cdev_info->pcidev;
+	rf->pf_id = cdev_info->fid;
 	rf->hw.hw_addr = cdev_info->hw_addr;
 	rf->cdev = cdev_info;
 	rf->msix_count = cdev_info->msix_count;
@@ -198,7 +199,7 @@ static void i40iw_remove(struct auxiliary_device *aux_dev)
 							       aux_dev);
 	struct i40e_info *cdev_info = i40e_adev->ldev;
 
-	return i40e_client_device_unregister(cdev_info);
+	i40e_client_device_unregister(cdev_info);
 }
 
 static const struct auxiliary_device_id i40iw_auxiliary_id_table[] = {

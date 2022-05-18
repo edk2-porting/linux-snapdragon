@@ -25,7 +25,6 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <stdarg.h>
 #include <linux/delay.h>
 #include <linux/ctype.h>
 #include <linux/of_gpio.h>

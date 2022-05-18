@@ -760,9 +760,9 @@ void __init lapic_update_legacy_vectors(void)
 
 void __init lapic_assign_system_vectors(void)
 {
-	unsigned int i, vector = 0;
+	unsigned int i, vector;
 
-	for_each_set_bit_from(vector, system_vectors, NR_VECTORS)
+	for_each_set_bit(vector, system_vectors, NR_VECTORS)
 		irq_matrix_assign_system(vector_matrix, vector, false);
 
 	if (nr_legacy_irqs() > 1)
@@ -1299,7 +1299,7 @@ static void __init print_PIC(void)
 
 	pr_debug("... PIC  ISR: %04x\n", v);
 
-	v = inb(0x4d1) << 8 | inb(0x4d0);
+	v = inb(PIC_ELCR2) << 8 | inb(PIC_ELCR1);
 	pr_debug("... PIC ELCR: %04x\n", v);
 }
 

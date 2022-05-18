@@ -89,6 +89,7 @@ typedef struct xfs_buftarg {
 	dev_t			bt_dev;
 	struct block_device	*bt_bdev;
 	struct dax_device	*bt_daxdev;
+	u64			bt_dax_part_off;
 	struct xfs_mount	*bt_mount;
 	unsigned int		bt_meta_sectorsize;
 	size_t			bt_meta_sectormask;
@@ -133,7 +134,8 @@ struct xfs_buf {
 	 * fast-path on locking.
 	 */
 	struct rhash_head	b_rhash_head;	/* pag buffer hash node */
-	xfs_daddr_t		b_bn;		/* block number of buffer */
+
+	xfs_daddr_t		b_rhash_key;	/* buffer cache index */
 	int			b_length;	/* size of buffer in BBs */
 	atomic_t		b_hold;		/* reference count */
 	atomic_t		b_lru_ref;	/* lru reclaim ref count */
@@ -296,18 +298,10 @@ extern int xfs_buf_delwri_pushbuf(struct xfs_buf *, struct list_head *);
 extern int xfs_buf_init(void);
 extern void xfs_buf_terminate(void);
 
-/*
- * These macros use the IO block map rather than b_bn. b_bn is now really
- * just for the buffer cache index for cached buffers. As IO does not use b_bn
- * anymore, uncached buffers do not use b_bn at all and hence must modify the IO
- * map directly. Uncached buffers are not allowed to be discontiguous, so this
- * is safe to do.
- *
- * In future, uncached buffers will pass the block number directly to the io
- * request function and hence these macros will go away at that point.
- */
-#define XFS_BUF_ADDR(bp)		((bp)->b_maps[0].bm_bn)
-#define XFS_BUF_SET_ADDR(bp, bno)	((bp)->b_maps[0].bm_bn = (xfs_daddr_t)(bno))
+static inline xfs_daddr_t xfs_buf_daddr(struct xfs_buf *bp)
+{
+	return bp->b_maps[0].bm_bn;
+}
 
 void xfs_buf_set_ref(struct xfs_buf *bp, int lru_ref);
 
@@ -345,8 +339,8 @@ xfs_buf_update_cksum(struct xfs_buf *bp, unsigned long cksum_offset)
 /*
  *	Handling of buftargs.
  */
-extern struct xfs_buftarg *xfs_alloc_buftarg(struct xfs_mount *,
-		struct block_device *, struct dax_device *);
+struct xfs_buftarg *xfs_alloc_buftarg(struct xfs_mount *mp,
+		struct block_device *bdev);
 extern void xfs_free_buftarg(struct xfs_buftarg *);
 extern void xfs_buftarg_wait(struct xfs_buftarg *);
 extern void xfs_buftarg_drain(struct xfs_buftarg *);
@@ -354,12 +348,6 @@ extern int xfs_setsize_buftarg(struct xfs_buftarg *, unsigned int);
 
 #define xfs_getsize_buftarg(buftarg)	block_size((buftarg)->bt_bdev)
 #define xfs_readonly_buftarg(buftarg)	bdev_read_only((buftarg)->bt_bdev)
-
-static inline int
-xfs_buftarg_dma_alignment(struct xfs_buftarg *bt)
-{
-	return queue_dma_alignment(bt->bt_bdev->bd_disk->queue);
-}
 
 int xfs_buf_reverify(struct xfs_buf *bp, const struct xfs_buf_ops *ops);
 bool xfs_verify_magic(struct xfs_buf *bp, __be32 dmagic);

@@ -13,6 +13,7 @@
 #include "bpf_iter_tcp6.skel.h"
 #include "bpf_iter_udp4.skel.h"
 #include "bpf_iter_udp6.skel.h"
+#include "bpf_iter_unix.skel.h"
 #include "bpf_iter_test_kern1.skel.h"
 #include "bpf_iter_test_kern2.skel.h"
 #include "bpf_iter_test_kern3.skel.h"
@@ -313,6 +314,19 @@ static void test_udp6(void)
 	bpf_iter_udp6__destroy(skel);
 }
 
+static void test_unix(void)
+{
+	struct bpf_iter_unix *skel;
+
+	skel = bpf_iter_unix__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_unix__open_and_load"))
+		return;
+
+	do_dummy_read(skel->progs.dump_unix);
+
+	bpf_iter_unix__destroy(skel);
+}
+
 /* The expected string is less than 16 bytes */
 static int do_read_with_fd(int iter_fd, const char *expected,
 			   bool read_one_char)
@@ -455,12 +469,12 @@ static void test_overflow(bool test_e2big_overflow, bool ret1)
 	 * fills seq_file buffer and then the other will trigger
 	 * overflow and needs restart.
 	 */
-	map1_fd = bpf_create_map(BPF_MAP_TYPE_ARRAY, 4, 8, 1, 0);
-	if (CHECK(map1_fd < 0, "bpf_create_map",
+	map1_fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, NULL, 4, 8, 1, NULL);
+	if (CHECK(map1_fd < 0, "bpf_map_create",
 		  "map_creation failed: %s\n", strerror(errno)))
 		goto out;
-	map2_fd = bpf_create_map(BPF_MAP_TYPE_ARRAY, 4, 8, 1, 0);
-	if (CHECK(map2_fd < 0, "bpf_create_map",
+	map2_fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, NULL, 4, 8, 1, NULL);
+	if (CHECK(map2_fd < 0, "bpf_map_create",
 		  "map_creation failed: %s\n", strerror(errno)))
 		goto free_map1;
 
@@ -575,7 +589,7 @@ out:
 
 static void test_bpf_hash_map(void)
 {
-	__u32 expected_key_a = 0, expected_key_b = 0, expected_key_c = 0;
+	__u32 expected_key_a = 0, expected_key_b = 0;
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
 	struct bpf_iter_bpf_hash_map *skel;
 	int err, i, len, map_fd, iter_fd;
@@ -624,7 +638,6 @@ static void test_bpf_hash_map(void)
 		val = i + 4;
 		expected_key_a += key.a;
 		expected_key_b += key.b;
-		expected_key_c += key.c;
 		expected_val += val;
 
 		err = bpf_map_update_elem(map_fd, &key, &val, BPF_ANY);
@@ -671,7 +684,7 @@ out:
 
 static void test_bpf_percpu_hash_map(void)
 {
-	__u32 expected_key_a = 0, expected_key_b = 0, expected_key_c = 0;
+	__u32 expected_key_a = 0, expected_key_b = 0;
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
 	struct bpf_iter_bpf_percpu_hash_map *skel;
 	int err, i, j, len, map_fd, iter_fd;
@@ -686,14 +699,13 @@ static void test_bpf_percpu_hash_map(void)
 	char buf[64];
 	void *val;
 
-	val = malloc(8 * bpf_num_possible_cpus());
-
 	skel = bpf_iter_bpf_percpu_hash_map__open();
 	if (CHECK(!skel, "bpf_iter_bpf_percpu_hash_map__open",
 		  "skeleton open failed\n"))
 		return;
 
 	skel->rodata->num_cpus = bpf_num_possible_cpus();
+	val = malloc(8 * bpf_num_possible_cpus());
 
 	err = bpf_iter_bpf_percpu_hash_map__load(skel);
 	if (CHECK(!skel, "bpf_iter_bpf_percpu_hash_map__load",
@@ -708,7 +720,6 @@ static void test_bpf_percpu_hash_map(void)
 		key.c = i + 3;
 		expected_key_a += key.a;
 		expected_key_b += key.b;
-		expected_key_c += key.c;
 
 		for (j = 0; j < bpf_num_possible_cpus(); j++) {
 			*(__u32 *)(val + j * 8) = i + j;
@@ -758,6 +769,7 @@ free_link:
 	bpf_link__destroy(link);
 out:
 	bpf_iter_bpf_percpu_hash_map__destroy(skel);
+	free(val);
 }
 
 static void test_bpf_array_map(void)
@@ -858,14 +870,13 @@ static void test_bpf_percpu_array_map(void)
 	void *val;
 	int len;
 
-	val = malloc(8 * bpf_num_possible_cpus());
-
 	skel = bpf_iter_bpf_percpu_array_map__open();
 	if (CHECK(!skel, "bpf_iter_bpf_percpu_array_map__open",
 		  "skeleton open failed\n"))
 		return;
 
 	skel->rodata->num_cpus = bpf_num_possible_cpus();
+	val = malloc(8 * bpf_num_possible_cpus());
 
 	err = bpf_iter_bpf_percpu_array_map__load(skel);
 	if (CHECK(!skel, "bpf_iter_bpf_percpu_array_map__load",
@@ -921,6 +932,7 @@ free_link:
 	bpf_link__destroy(link);
 out:
 	bpf_iter_bpf_percpu_array_map__destroy(skel);
+	free(val);
 }
 
 /* An iterator program deletes all local storage in a map. */
@@ -1194,13 +1206,14 @@ static void test_task_vma(void)
 		goto out;
 
 	/* Read CMP_BUFFER_SIZE (1kB) from bpf_iter. Read in small chunks
-	 * to trigger seq_file corner cases. The expected output is much
-	 * longer than 1kB, so the while loop will terminate.
+	 * to trigger seq_file corner cases.
 	 */
 	len = 0;
 	while (len < CMP_BUFFER_SIZE) {
 		err = read_fd_into_buffer(iter_fd, task_vma_output + len,
 					  min(read_size, CMP_BUFFER_SIZE - len));
+		if (!err)
+			break;
 		if (CHECK(err < 0, "read_iter_fd", "read_iter_fd failed\n"))
 			goto out;
 		len += err;
@@ -1255,6 +1268,8 @@ void test_bpf_iter(void)
 		test_udp4();
 	if (test__start_subtest("udp6"))
 		test_udp6();
+	if (test__start_subtest("unix"))
+		test_unix();
 	if (test__start_subtest("anon"))
 		test_anon_iter(false);
 	if (test__start_subtest("anon-read-one-char"))

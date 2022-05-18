@@ -138,10 +138,13 @@ void noinstr do_io_irq(struct pt_regs *regs)
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	int from_idle;
 
-	irq_enter();
+	irq_enter_rcu();
 
-	if (user_mode(regs))
+	if (user_mode(regs)) {
 		update_timer_sys();
+		if (static_branch_likely(&cpu_has_bear))
+			current->thread.last_break = regs->last_break;
+	}
 
 	from_idle = !user_mode(regs) && regs->psw.addr == (unsigned long)psw_idle_exit;
 	if (from_idle)
@@ -155,7 +158,8 @@ void noinstr do_io_irq(struct pt_regs *regs)
 			do_irq_async(regs, IO_INTERRUPT);
 	} while (MACHINE_IS_LPAR && irq_pending(regs));
 
-	irq_exit();
+	irq_exit_rcu();
+
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
 
@@ -169,10 +173,13 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	int from_idle;
 
-	irq_enter();
+	irq_enter_rcu();
 
-	if (user_mode(regs))
+	if (user_mode(regs)) {
 		update_timer_sys();
+		if (static_branch_likely(&cpu_has_bear))
+			current->thread.last_break = regs->last_break;
+	}
 
 	regs->int_code = S390_lowcore.ext_int_code_addr;
 	regs->int_parm = S390_lowcore.ext_params;
@@ -184,7 +191,7 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 
 	do_irq_async(regs, EXT_INTERRUPT);
 
-	irq_exit();
+	irq_exit_rcu();
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
 
@@ -228,7 +235,7 @@ int show_interrupts(struct seq_file *p, void *v)
 	int index = *(loff_t *) v;
 	int cpu, irq;
 
-	get_online_cpus();
+	cpus_read_lock();
 	if (index == 0) {
 		seq_puts(p, "           ");
 		for_each_online_cpu(cpu)
@@ -258,7 +265,7 @@ int show_interrupts(struct seq_file *p, void *v)
 		seq_putc(p, '\n');
 	}
 out:
-	put_online_cpus();
+	cpus_read_unlock();
 	return 0;
 }
 

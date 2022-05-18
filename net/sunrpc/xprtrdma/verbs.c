@@ -63,17 +63,6 @@
 #include "xprt_rdma.h"
 #include <trace/events/rpcrdma.h>
 
-/*
- * Globals/Macros
- */
-
-#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
-# define RPCDBG_FACILITY	RPCDBG_TRANS
-#endif
-
-/*
- * internal functions
- */
 static int rpcrdma_sendctxs_create(struct rpcrdma_xprt *r_xprt);
 static void rpcrdma_sendctxs_destroy(struct rpcrdma_xprt *r_xprt);
 static void rpcrdma_sendctx_put_locked(struct rpcrdma_xprt *r_xprt,
@@ -124,7 +113,7 @@ static void rpcrdma_xprt_drain(struct rpcrdma_xprt *r_xprt)
  * connection is closed or lost. (The important thing is it needs
  * to be invoked "at least" once).
  */
-static void rpcrdma_force_disconnect(struct rpcrdma_ep *ep)
+void rpcrdma_force_disconnect(struct rpcrdma_ep *ep)
 {
 	if (atomic_add_unless(&ep->re_force_disconnect, 1, 1))
 		xprt_force_disconnect(ep->re_xprt);
@@ -205,14 +194,12 @@ static void rpcrdma_update_cm_private(struct rpcrdma_ep *ep,
 	unsigned int rsize, wsize;
 
 	/* Default settings for RPC-over-RDMA Version One */
-	ep->re_implicit_roundup = xprt_rdma_pad_optimize;
 	rsize = RPCRDMA_V1_DEF_INLINE_SIZE;
 	wsize = RPCRDMA_V1_DEF_INLINE_SIZE;
 
 	if (pmsg &&
 	    pmsg->cp_magic == rpcrdma_cmp_magic &&
 	    pmsg->cp_version == RPCRDMA_CMP_VERSION) {
-		ep->re_implicit_roundup = true;
 		rsize = rpcrdma_decode_buffer_size(pmsg->cp_send_size);
 		wsize = rpcrdma_decode_buffer_size(pmsg->cp_recv_size);
 	}
@@ -276,8 +263,6 @@ rpcrdma_cm_event_handler(struct rdma_cm_id *id, struct rdma_cm_event *event)
 		ep->re_connect_status = -ENETUNREACH;
 		goto wake_connect_worker;
 	case RDMA_CM_EVENT_REJECTED:
-		dprintk("rpcrdma: connection to %pISpc rejected: %s\n",
-			sap, rdma_reject_msg(id, event->status));
 		ep->re_connect_status = -ECONNREFUSED;
 		if (event->status == IB_CM_REJ_STALE_CONN)
 			ep->re_connect_status = -ENOTCONN;
@@ -293,8 +278,6 @@ disconnected:
 		break;
 	}
 
-	dprintk("RPC:       %s: %pISpc on %s/frwr: %s\n", __func__, sap,
-		ep->re_id->device->name, rdma_event_msg(event->event));
 	return 0;
 }
 
@@ -421,14 +404,6 @@ static int rpcrdma_ep_create(struct rpcrdma_xprt *r_xprt)
 	ep->re_attr.qp_type = IB_QPT_RC;
 	ep->re_attr.port_num = ~0;
 
-	dprintk("RPC:       %s: requested max: dtos: send %d recv %d; "
-		"iovs: send %d recv %d\n",
-		__func__,
-		ep->re_attr.cap.max_send_wr,
-		ep->re_attr.cap.max_recv_wr,
-		ep->re_attr.cap.max_send_sge,
-		ep->re_attr.cap.max_recv_sge);
-
 	ep->re_send_batch = ep->re_max_requests >> 3;
 	ep->re_send_count = ep->re_send_batch;
 	init_waitqueue_head(&ep->re_connect_wait);
@@ -438,6 +413,7 @@ static int rpcrdma_ep_create(struct rpcrdma_xprt *r_xprt)
 					      IB_POLL_WORKQUEUE);
 	if (IS_ERR(ep->re_attr.send_cq)) {
 		rc = PTR_ERR(ep->re_attr.send_cq);
+		ep->re_attr.send_cq = NULL;
 		goto out_destroy;
 	}
 
@@ -446,6 +422,7 @@ static int rpcrdma_ep_create(struct rpcrdma_xprt *r_xprt)
 					      IB_POLL_WORKQUEUE);
 	if (IS_ERR(ep->re_attr.recv_cq)) {
 		rc = PTR_ERR(ep->re_attr.recv_cq);
+		ep->re_attr.recv_cq = NULL;
 		goto out_destroy;
 	}
 	ep->re_receive_count = 0;
@@ -484,6 +461,7 @@ static int rpcrdma_ep_create(struct rpcrdma_xprt *r_xprt)
 	ep->re_pd = ib_alloc_pd(device, 0);
 	if (IS_ERR(ep->re_pd)) {
 		rc = PTR_ERR(ep->re_pd);
+		ep->re_pd = NULL;
 		goto out_destroy;
 	}
 
@@ -551,6 +529,7 @@ int rpcrdma_xprt_connect(struct rpcrdma_xprt *r_xprt)
 		goto out;
 	}
 	rpcrdma_mrs_create(r_xprt);
+	frwr_wp_create(r_xprt);
 
 out:
 	trace_xprtrdma_connect(r_xprt, rc);
@@ -1350,21 +1329,6 @@ static void rpcrdma_regbuf_free(struct rpcrdma_regbuf *rb)
 }
 
 /**
- * rpcrdma_post_sends - Post WRs to a transport's Send Queue
- * @r_xprt: controlling transport instance
- * @req: rpcrdma_req containing the Send WR to post
- *
- * Returns 0 if the post was successful, otherwise -ENOTCONN
- * is returned.
- */
-int rpcrdma_post_sends(struct rpcrdma_xprt *r_xprt, struct rpcrdma_req *req)
-{
-	if (frwr_send(r_xprt, req))
-		return -ENOTCONN;
-	return 0;
-}
-
-/**
  * rpcrdma_post_recvs - Refill the Receive Queue
  * @r_xprt: controlling transport instance
  * @needed: current credit grant
@@ -1417,6 +1381,7 @@ void rpcrdma_post_recvs(struct rpcrdma_xprt *r_xprt, int needed, bool temp)
 	rc = ib_post_recv(ep->re_id->qp, wr,
 			  (const struct ib_recv_wr **)&bad_wr);
 	if (rc) {
+		trace_xprtrdma_post_recvs_err(r_xprt, rc);
 		for (wr = bad_wr; wr;) {
 			struct rpcrdma_rep *rep;
 
@@ -1430,7 +1395,7 @@ void rpcrdma_post_recvs(struct rpcrdma_xprt *r_xprt, int needed, bool temp)
 		complete(&ep->re_done);
 
 out:
-	trace_xprtrdma_post_recvs(r_xprt, count, rc);
+	trace_xprtrdma_post_recvs(r_xprt, count);
 	ep->re_receive_count += count;
 	return;
 }

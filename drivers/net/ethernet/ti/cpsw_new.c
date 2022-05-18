@@ -28,6 +28,7 @@
 #include <linux/kmemleak.h>
 #include <linux/sys_soc.h>
 
+#include <net/switchdev.h>
 #include <net/page_pool.h>
 #include <net/pkt_cls.h>
 #include <net/devlink.h>
@@ -282,7 +283,7 @@ static void cpsw_rx_handler(void *token, int len, int status)
 {
 	struct page *new_page, *page = token;
 	void *pa = page_address(page);
-	int headroom = CPSW_HEADROOM;
+	int headroom = CPSW_HEADROOM_NA;
 	struct cpsw_meta_xdp *xmeta;
 	struct cpsw_common *cpsw;
 	struct net_device *ndev;
@@ -335,7 +336,7 @@ static void cpsw_rx_handler(void *token, int len, int status)
 	}
 
 	if (priv->xdp_prog) {
-		int headroom = CPSW_HEADROOM, size = len;
+		int size = len;
 
 		xdp_init_buff(&xdp, PAGE_SIZE, &priv->xdp_rxq[ch]);
 		if (status & CPDMA_RX_VLAN_ENCAP) {
@@ -374,7 +375,7 @@ static void cpsw_rx_handler(void *token, int len, int status)
 	skb->protocol = eth_type_trans(skb, ndev);
 
 	/* mark skb for recycling */
-	skb_mark_for_recycle(skb, page, pool);
+	skb_mark_for_recycle(skb);
 	netif_receive_skb(skb);
 
 	ndev->stats.rx_bytes += len;
@@ -385,7 +386,7 @@ requeue:
 	xmeta->ndev = ndev;
 	xmeta->ch = ch;
 
-	dma = page_pool_get_dma_addr(new_page) + CPSW_HEADROOM;
+	dma = page_pool_get_dma_addr(new_page) + CPSW_HEADROOM_NA;
 	ret = cpdma_chan_submit_mapped(cpsw->rxv[ch].ch, new_page, dma,
 				       pkt_size, 0);
 	if (ret < 0) {
@@ -501,7 +502,7 @@ static void cpsw_restore(struct cpsw_priv *priv)
 
 static void cpsw_init_stp_ale_entry(struct cpsw_common *cpsw)
 {
-	char stpa[] = {0x01, 0x80, 0xc2, 0x0, 0x0, 0x0};
+	static const char stpa[] = {0x01, 0x80, 0xc2, 0x0, 0x0, 0x0};
 
 	cpsw_ale_add_mcast(cpsw->ale, stpa,
 			   ALE_PORT_HOST, ALE_SUPER, 0,
@@ -893,7 +894,7 @@ static int cpsw_ndo_open(struct net_device *ndev)
 		struct ethtool_coalesce coal;
 
 		coal.rx_coalesce_usecs = cpsw->coal_intvl;
-		cpsw_set_coalesce(ndev, &coal);
+		cpsw_set_coalesce(ndev, &coal, NULL, NULL);
 	}
 
 	cpdma_ctlr_start(cpsw->dma);
@@ -999,7 +1000,7 @@ static int cpsw_ndo_set_mac_address(struct net_device *ndev, void *p)
 			   flags, vid);
 
 	ether_addr_copy(priv->mac_addr, addr->sa_data);
-	ether_addr_copy(ndev->dev_addr, priv->mac_addr);
+	eth_hw_addr_set(ndev, priv->mac_addr);
 	cpsw_set_slave_mac(&cpsw->slaves[slave_no], priv);
 
 	pm_runtime_put(cpsw->dev);
@@ -1127,7 +1128,7 @@ static const struct net_device_ops cpsw_netdev_ops = {
 	.ndo_stop		= cpsw_ndo_stop,
 	.ndo_start_xmit		= cpsw_ndo_start_xmit,
 	.ndo_set_mac_address	= cpsw_ndo_set_mac_address,
-	.ndo_do_ioctl		= cpsw_ndo_ioctl,
+	.ndo_eth_ioctl		= cpsw_ndo_ioctl,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_tx_timeout		= cpsw_ndo_tx_timeout,
 	.ndo_set_rx_mode	= cpsw_ndo_set_rx_mode,
@@ -1245,8 +1246,10 @@ static int cpsw_probe_dt(struct cpsw_common *cpsw)
 	data->slave_data = devm_kcalloc(dev, CPSW_SLAVE_PORTS_NUM,
 					sizeof(struct cpsw_slave_data),
 					GFP_KERNEL);
-	if (!data->slave_data)
+	if (!data->slave_data) {
+		of_node_put(tmp_node);
 		return -ENOMEM;
+	}
 
 	/* Populate all the child nodes here...
 	 */
@@ -1340,6 +1343,7 @@ static int cpsw_probe_dt(struct cpsw_common *cpsw)
 
 err_node_put:
 	of_node_put(port_np);
+	of_node_put(tmp_node);
 	return ret;
 }
 
@@ -1400,7 +1404,7 @@ static int cpsw_create_ports(struct cpsw_common *cpsw)
 			dev_info(cpsw->dev, "Random MACID = %pM\n",
 				 priv->mac_addr);
 		}
-		ether_addr_copy(ndev->dev_addr, slave_data->mac_addr);
+		eth_hw_addr_set(ndev, slave_data->mac_addr);
 		ether_addr_copy(priv->mac_addr, slave_data->mac_addr);
 
 		cpsw->slaves[i].ndev = ndev;
@@ -1500,10 +1504,12 @@ static void cpsw_port_offload_fwd_mark_update(struct cpsw_common *cpsw)
 }
 
 static int cpsw_netdevice_port_link(struct net_device *ndev,
-				    struct net_device *br_ndev)
+				    struct net_device *br_ndev,
+				    struct netlink_ext_ack *extack)
 {
 	struct cpsw_priv *priv = netdev_priv(ndev);
 	struct cpsw_common *cpsw = priv->cpsw;
+	int err;
 
 	if (!cpsw->br_members) {
 		cpsw->hw_bridge_dev = br_ndev;
@@ -1514,6 +1520,11 @@ static int cpsw_netdevice_port_link(struct net_device *ndev,
 		if (cpsw->hw_bridge_dev != br_ndev)
 			return -EOPNOTSUPP;
 	}
+
+	err = switchdev_bridge_port_offload(ndev, ndev, NULL, NULL, NULL,
+					    false, extack);
+	if (err)
+		return err;
 
 	cpsw->br_members |= BIT(priv->emac_port);
 
@@ -1527,6 +1538,8 @@ static void cpsw_netdevice_port_unlink(struct net_device *ndev)
 	struct cpsw_priv *priv = netdev_priv(ndev);
 	struct cpsw_common *cpsw = priv->cpsw;
 
+	switchdev_bridge_port_unoffload(ndev, NULL, NULL, NULL);
+
 	cpsw->br_members &= ~BIT(priv->emac_port);
 
 	cpsw_port_offload_fwd_mark_update(cpsw);
@@ -1539,6 +1552,7 @@ static void cpsw_netdevice_port_unlink(struct net_device *ndev)
 static int cpsw_netdevice_event(struct notifier_block *unused,
 				unsigned long event, void *ptr)
 {
+	struct netlink_ext_ack *extack = netdev_notifier_info_to_extack(ptr);
 	struct net_device *ndev = netdev_notifier_info_to_dev(ptr);
 	struct netdev_notifier_changeupper_info *info;
 	int ret = NOTIFY_DONE;
@@ -1553,7 +1567,8 @@ static int cpsw_netdevice_event(struct notifier_block *unused,
 		if (netif_is_bridge_master(info->upper_dev)) {
 			if (info->linking)
 				ret = cpsw_netdevice_port_link(ndev,
-							       info->upper_dev);
+							       info->upper_dev,
+							       extack);
 			else
 				cpsw_netdevice_port_unlink(ndev);
 		}
@@ -1791,18 +1806,12 @@ static int cpsw_register_devlink(struct cpsw_common *cpsw)
 	struct cpsw_devlink *dl_priv;
 	int ret = 0;
 
-	cpsw->devlink = devlink_alloc(&cpsw_devlink_ops, sizeof(*dl_priv));
+	cpsw->devlink = devlink_alloc(&cpsw_devlink_ops, sizeof(*dl_priv), dev);
 	if (!cpsw->devlink)
 		return -ENOMEM;
 
 	dl_priv = devlink_priv(cpsw->devlink);
 	dl_priv->cpsw = cpsw;
-
-	ret = devlink_register(cpsw->devlink, dev);
-	if (ret) {
-		dev_err(dev, "DL reg fail ret:%d\n", ret);
-		goto dl_free;
-	}
 
 	ret = devlink_params_register(cpsw->devlink, cpsw_devlink_params,
 				      ARRAY_SIZE(cpsw_devlink_params));
@@ -1811,22 +1820,19 @@ static int cpsw_register_devlink(struct cpsw_common *cpsw)
 		goto dl_unreg;
 	}
 
-	devlink_params_publish(cpsw->devlink);
+	devlink_register(cpsw->devlink);
 	return ret;
 
 dl_unreg:
-	devlink_unregister(cpsw->devlink);
-dl_free:
 	devlink_free(cpsw->devlink);
 	return ret;
 }
 
 static void cpsw_unregister_devlink(struct cpsw_common *cpsw)
 {
-	devlink_params_unpublish(cpsw->devlink);
+	devlink_unregister(cpsw->devlink);
 	devlink_params_unregister(cpsw->devlink, cpsw_devlink_params,
 				  ARRAY_SIZE(cpsw_devlink_params));
-	devlink_unregister(cpsw->devlink);
 	devlink_free(cpsw->devlink);
 }
 

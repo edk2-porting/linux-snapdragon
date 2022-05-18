@@ -3,8 +3,10 @@
 
 ret=0
 sin=""
+sinfail=""
 sout=""
 cin=""
+cinfail=""
 cinsent=""
 cout=""
 ksft_skip=4
@@ -73,6 +75,15 @@ init()
 
 		# let $ns2 reach any $ns1 address from any interface
 		ip -net "$ns2" route add default via 10.0.$i.1 dev ns2eth$i metric 10$i
+		ip -net "$ns2" route add default via dead:beef:$i::1 dev ns2eth$i metric 10$i
+	done
+}
+
+init_shapers()
+{
+	for i in `seq 1 4`; do
+		tc -n $ns1 qdisc add dev ns1eth$i root netem rate 20mbit delay 1
+		tc -n $ns2 qdisc add dev ns2eth$i root netem rate 20mbit delay 1
 	done
 }
 
@@ -88,8 +99,8 @@ cleanup_partial()
 
 cleanup()
 {
-	rm -f "$cin" "$cout"
-	rm -f "$sin" "$sout" "$cinsent"
+	rm -f "$cin" "$cout" "$sinfail"
+	rm -f "$sin" "$sout" "$cinsent" "$cinfail"
 	cleanup_partial
 }
 
@@ -211,17 +222,60 @@ link_failure()
 {
 	ns="$1"
 
-	l=$((RANDOM%4))
-	l=$((l+1))
+	if [ -z "$FAILING_LINKS" ]; then
+		l=$((RANDOM%4))
+		FAILING_LINKS=$((l+1))
+	fi
 
-	veth="ns1eth$l"
-	ip -net "$ns" link set "$veth" down
+	for l in $FAILING_LINKS; do
+		veth="ns1eth$l"
+		ip -net "$ns" link set "$veth" down
+	done
 }
 
 # $1: IP address
 is_v6()
 {
 	[ -z "${1##*:*}" ]
+}
+
+# $1: ns, $2: port
+wait_local_port_listen()
+{
+	local listener_ns="${1}"
+	local port="${2}"
+
+	local port_hex i
+
+	port_hex="$(printf "%04X" "${port}")"
+	for i in $(seq 10); do
+		ip netns exec "${listener_ns}" cat /proc/net/tcp* | \
+			awk "BEGIN {rc=1} {if (\$2 ~ /:${port_hex}\$/ && \$4 ~ /0A/) {rc=0; exit}} END {exit rc}" &&
+			break
+		sleep 0.1
+	done
+}
+
+rm_addr_count()
+{
+	ns=${1}
+
+	ip netns exec ${ns} nstat -as | grep MPTcpExtRmAddr | awk '{print $2}'
+}
+
+# $1: ns, $2: old rm_addr counter in $ns
+wait_rm_addr()
+{
+	local ns="${1}"
+	local old_cnt="${2}"
+	local cnt
+	local i
+
+	for i in $(seq 10); do
+		cnt=$(rm_addr_count ${ns})
+		[ "$cnt" = "${old_cnt}" ] || break
+		sleep 0.1
+	done
 }
 
 do_transfer()
@@ -280,13 +334,20 @@ do_transfer()
 		local_addr="0.0.0.0"
 	fi
 
-	timeout ${timeout_test} \
-		ip netns exec ${listener_ns} \
-			$mptcp_connect -t ${timeout_poll} -l -p $port -s ${srv_proto} \
-				${local_addr} < "$sin" > "$sout" &
+	if [ "$test_link_fail" -eq 2 ];then
+		timeout ${timeout_test} \
+			ip netns exec ${listener_ns} \
+				$mptcp_connect -t ${timeout_poll} -l -p $port -s ${srv_proto} \
+					${local_addr} < "$sinfail" > "$sout" &
+	else
+		timeout ${timeout_test} \
+			ip netns exec ${listener_ns} \
+				$mptcp_connect -t ${timeout_poll} -l -p $port -s ${srv_proto} \
+					${local_addr} < "$sin" > "$sout" &
+	fi
 	spid=$!
 
-	sleep 1
+	wait_local_port_listen "${listener_ns}" "${port}"
 
 	if [ "$test_link_fail" -eq 0 ];then
 		timeout ${timeout_test} \
@@ -294,7 +355,7 @@ do_transfer()
 				$mptcp_connect -t ${timeout_poll} -p $port -s ${cl_proto} \
 					$connect_addr < "$cin" > "$cout" &
 	else
-		( cat "$cin" ; sleep 2; link_failure $listener_ns ; cat "$cin" ) | \
+		( cat "$cinfail" ; sleep 2; link_failure $listener_ns ; cat "$cinfail" ) | \
 			tee "$cinsent" | \
 			timeout ${timeout_test} \
 				ip netns exec ${connector_ns} \
@@ -303,10 +364,13 @@ do_transfer()
 	fi
 	cpid=$!
 
+	# let the mptcp subflow be established in background before
+	# do endpoint manipulation
+	[ $addr_nr_ns1 = "0" -a $addr_nr_ns2 = "0" ] || sleep 1
+
 	if [ $addr_nr_ns1 -gt 0 ]; then
 		let add_nr_ns1=addr_nr_ns1
 		counter=2
-		sleep 1
 		while [ $add_nr_ns1 -gt 0 ]; do
 			local addr
 			if is_v6 "${connect_addr}"; then
@@ -318,37 +382,43 @@ do_transfer()
 			let counter+=1
 			let add_nr_ns1-=1
 		done
-		sleep 1
 	elif [ $addr_nr_ns1 -lt 0 ]; then
 		let rm_nr_ns1=-addr_nr_ns1
 		if [ $rm_nr_ns1 -lt 8 ]; then
 			counter=1
+			pos=1
 			dump=(`ip netns exec ${listener_ns} ./pm_nl_ctl dump`)
 			if [ ${#dump[@]} -gt 0 ]; then
-				id=${dump[1]}
-				sleep 1
-
 				while [ $counter -le $rm_nr_ns1 ]
 				do
+					id=${dump[$pos]}
+					rm_addr=$(rm_addr_count ${connector_ns})
 					ip netns exec ${listener_ns} ./pm_nl_ctl del $id
-					sleep 1
+					wait_rm_addr ${connector_ns} ${rm_addr}
 					let counter+=1
-					let id+=1
+					let pos+=5
 				done
 			fi
 		elif [ $rm_nr_ns1 -eq 8 ]; then
-			sleep 1
 			ip netns exec ${listener_ns} ./pm_nl_ctl flush
 		elif [ $rm_nr_ns1 -eq 9 ]; then
-			sleep 1
 			ip netns exec ${listener_ns} ./pm_nl_ctl del 0 ${connect_addr}
 		fi
 	fi
 
+	flags="subflow"
+	if [[ "${addr_nr_ns2}" = "fullmesh_"* ]]; then
+		flags="${flags},fullmesh"
+		addr_nr_ns2=${addr_nr_ns2:9}
+	fi
+
+	# if newly added endpoints must be deleted, give the background msk
+	# some time to created them
+	[ $addr_nr_ns1 -gt 0 -a $addr_nr_ns2 -lt 0 ] && sleep 1
+
 	if [ $addr_nr_ns2 -gt 0 ]; then
 		let add_nr_ns2=addr_nr_ns2
 		counter=3
-		sleep 1
 		while [ $add_nr_ns2 -gt 0 ]; do
 			local addr
 			if is_v6 "${connect_addr}"; then
@@ -356,30 +426,29 @@ do_transfer()
 			else
 				addr="10.0.$counter.2"
 			fi
-			ip netns exec $ns2 ./pm_nl_ctl add $addr flags subflow
+			ip netns exec $ns2 ./pm_nl_ctl add $addr flags $flags
 			let counter+=1
 			let add_nr_ns2-=1
 		done
-		sleep 1
 	elif [ $addr_nr_ns2 -lt 0 ]; then
 		let rm_nr_ns2=-addr_nr_ns2
 		if [ $rm_nr_ns2 -lt 8 ]; then
 			counter=1
+			pos=1
 			dump=(`ip netns exec ${connector_ns} ./pm_nl_ctl dump`)
 			if [ ${#dump[@]} -gt 0 ]; then
-				id=${dump[1]}
-				sleep 1
-
 				while [ $counter -le $rm_nr_ns2 ]
 				do
+					# rm_addr are serialized, allow the previous one to complete
+					id=${dump[$pos]}
+					rm_addr=$(rm_addr_count ${listener_ns})
 					ip netns exec ${connector_ns} ./pm_nl_ctl del $id
-					sleep 1
+					wait_rm_addr ${listener_ns} ${rm_addr}
 					let counter+=1
-					let id+=1
+					let pos+=5
 				done
 			fi
 		elif [ $rm_nr_ns2 -eq 8 ]; then
-			sleep 1
 			ip netns exec ${connector_ns} ./pm_nl_ctl flush
 		elif [ $rm_nr_ns2 -eq 9 ]; then
 			local addr
@@ -388,7 +457,6 @@ do_transfer()
 			else
 				addr="10.0.1.2"
 			fi
-			sleep 1
 			ip netns exec ${connector_ns} ./pm_nl_ctl del 0 $addr
 		fi
 	fi
@@ -434,7 +502,11 @@ do_transfer()
 		return 1
 	fi
 
-	check_transfer $sin $cout "file received by client"
+	if [ "$test_link_fail" -eq 2 ];then
+		check_transfer $sinfail $cout "file received by client"
+	else
+		check_transfer $sin $cout "file received by client"
+	fi
 	retc=$?
 	if [ "$test_link_fail" -eq 0 ];then
 		check_transfer $cin $sout "file received by server"
@@ -477,29 +549,41 @@ run_tests()
 	lret=0
 	oldin=""
 
-	if [ "$test_linkfail" -eq 1 ];then
-		size=$((RANDOM%1024))
+	# create the input file for the failure test when
+	# the first failure test run
+	if [ "$test_linkfail" -ne 0 -a -z "$cinfail" ]; then
+		# the client file must be considerably larger
+		# of the maximum expected cwin value, or the
+		# link utilization will be not predicable
+		size=$((RANDOM%2))
 		size=$((size+1))
-		size=$((size*128))
+		size=$((size*8192))
+		size=$((size + ( $RANDOM % 8192) ))
 
-		oldin=$(mktemp)
-		cp "$cin" "$oldin"
-		make_file "$cin" "client" $size
+		cinfail=$(mktemp)
+		make_file "$cinfail" "client" $size
+	fi
+
+	if [ "$test_linkfail" -eq 2 -a -z "$sinfail" ]; then
+		size=$((RANDOM%16))
+		size=$((size+1))
+		size=$((size*2048))
+
+		sinfail=$(mktemp)
+		make_file "$sinfail" "server" $size
 	fi
 
 	do_transfer ${listener_ns} ${connector_ns} MPTCP MPTCP ${connect_addr} \
 		${test_linkfail} ${addr_nr_ns1} ${addr_nr_ns2} ${speed} ${bkup}
 	lret=$?
+}
 
-	if [ "$test_linkfail" -eq 1 ];then
-		cp "$oldin" "$cin"
-		rm -f "$oldin"
-	fi
-
-	if [ $lret -ne 0 ]; then
-		ret=$lret
-		return
-	fi
+dump_stats()
+{
+	echo Server ns stats
+	ip netns exec $ns1 nstat -as | grep Tcp
+	echo Client ns stats
+	ip netns exec $ns2 nstat -as | grep Tcp
 }
 
 chk_csum_nr()
@@ -533,12 +617,39 @@ chk_csum_nr()
 	else
 		echo "[ ok ]"
 	fi
-	if [ "${dump_stats}" = 1 ]; then
-		echo Server ns stats
-		ip netns exec $ns1 nstat -as | grep MPTcp
-		echo Client ns stats
-		ip netns exec $ns2 nstat -as | grep MPTcp
+	[ "${dump_stats}" = 1 ] && dump_stats
+}
+
+chk_fail_nr()
+{
+	local mp_fail_nr_tx=$1
+	local mp_fail_nr_rx=$2
+	local count
+	local dump_stats
+
+	printf "%-39s %s" " " "ftx"
+	count=`ip netns exec $ns1 nstat -as | grep MPTcpExtMPFailTx | awk '{print $2}'`
+	[ -z "$count" ] && count=0
+	if [ "$count" != "$mp_fail_nr_tx" ]; then
+		echo "[fail] got $count MP_FAIL[s] TX expected $mp_fail_nr_tx"
+		ret=1
+		dump_stats=1
+	else
+		echo -n "[ ok ]"
 	fi
+
+	echo -n " - frx   "
+	count=`ip netns exec $ns2 nstat -as | grep MPTcpExtMPFailRx | awk '{print $2}'`
+	[ -z "$count" ] && count=0
+	if [ "$count" != "$mp_fail_nr_rx" ]; then
+		echo "[fail] got $count MP_FAIL[s] RX expected $mp_fail_nr_rx"
+		ret=1
+		dump_stats=1
+	else
+		echo "[ ok ]"
+	fi
+
+	[ "${dump_stats}" = 1 ] && dump_stats
 }
 
 chk_join_nr()
@@ -549,6 +660,7 @@ chk_join_nr()
 	local ack_nr=$4
 	local count
 	local dump_stats
+	local with_cookie
 
 	printf "%02u %-36s %s" "$TEST_COUNT" "$msg" "syn"
 	count=`ip netns exec $ns1 nstat -as | grep MPTcpExtMPJoinSynRx | awk '{print $2}'`
@@ -562,12 +674,20 @@ chk_join_nr()
 	fi
 
 	echo -n " - synack"
+	with_cookie=`ip netns exec $ns2 sysctl -n net.ipv4.tcp_syncookies`
 	count=`ip netns exec $ns2 nstat -as | grep MPTcpExtMPJoinSynAckRx | awk '{print $2}'`
 	[ -z "$count" ] && count=0
 	if [ "$count" != "$syn_ack_nr" ]; then
-		echo "[fail] got $count JOIN[s] synack expected $syn_ack_nr"
-		ret=1
-		dump_stats=1
+		# simult connections exceeding the limit with cookie enabled could go up to
+		# synack validation as the conn limit can be enforced reliably only after
+		# the subflow creation
+		if [ "$with_cookie" = 2 ] && [ "$count" -gt "$syn_ack_nr" ] && [ "$count" -le "$syn_nr" ]; then
+			echo -n "[ ok ]"
+		else
+			echo "[fail] got $count JOIN[s] synack expected $syn_ack_nr"
+			ret=1
+			dump_stats=1
+		fi
 	else
 		echo -n "[ ok ]"
 	fi
@@ -582,14 +702,50 @@ chk_join_nr()
 	else
 		echo "[ ok ]"
 	fi
-	if [ "${dump_stats}" = 1 ]; then
-		echo Server ns stats
-		ip netns exec $ns1 nstat -as | grep MPTcp
-		echo Client ns stats
-		ip netns exec $ns2 nstat -as | grep MPTcp
-	fi
+	[ "${dump_stats}" = 1 ] && dump_stats
 	if [ $checksum -eq 1 ]; then
 		chk_csum_nr
+		chk_fail_nr 0 0
+	fi
+}
+
+# a negative value for 'stale_max' means no upper bound:
+# for bidirectional transfer, if one peer sleep for a while
+# - as these tests do - we can have a quite high number of
+# stale/recover conversions, proportional to
+# sleep duration/ MPTCP-level RTX interval.
+chk_stale_nr()
+{
+	local ns=$1
+	local stale_min=$2
+	local stale_max=$3
+	local stale_delta=$4
+	local dump_stats
+	local stale_nr
+	local recover_nr
+
+	printf "%-39s %-18s" " " "stale"
+	stale_nr=`ip netns exec $ns nstat -as | grep MPTcpExtSubflowStale | awk '{print $2}'`
+	[ -z "$stale_nr" ] && stale_nr=0
+	recover_nr=`ip netns exec $ns nstat -as | grep MPTcpExtSubflowRecover | awk '{print $2}'`
+	[ -z "$recover_nr" ] && recover_nr=0
+
+	if [ $stale_nr -lt $stale_min ] ||
+	   [ $stale_max -gt 0 -a $stale_nr -gt $stale_max ] ||
+	   [ $((stale_nr - $recover_nr)) -ne $stale_delta ]; then
+		echo "[fail] got $stale_nr stale[s] $recover_nr recover[s], " \
+		     " expected stale in range [$stale_min..$stale_max]," \
+		     " stale-recover delta $stale_delta "
+		ret=1
+		dump_stats=1
+	else
+		echo "[ ok ]"
+	fi
+
+	if [ "${dump_stats}" = 1 ]; then
+		echo $ns stats
+		ip netns exec $ns ip -s link show
+		ip netns exec $ns nstat -as | grep MPTcp
 	fi
 }
 
@@ -605,11 +761,17 @@ chk_add_nr()
 	local mis_ack_nr=${8:-0}
 	local count
 	local dump_stats
+	local timeout
+
+	timeout=`ip netns exec $ns1 sysctl -n net.mptcp.add_addr_timeout`
 
 	printf "%-39s %s" " " "add"
-	count=`ip netns exec $ns2 nstat -as | grep MPTcpExtAddAddr | awk '{print $2}'`
+	count=`ip netns exec $ns2 nstat -as MPTcpExtAddAddr | grep MPTcpExtAddAddr | awk '{print $2}'`
 	[ -z "$count" ] && count=0
-	if [ "$count" != "$add_nr" ]; then
+
+	# if the test configured a short timeout tolerate greater then expected
+	# add addrs options, due to retransmissions
+	if [ "$count" != "$add_nr" ] && [ "$timeout" -gt 1 -o "$count" -lt "$add_nr" ]; then
 		echo "[fail] got $count ADD_ADDR[s] expected $add_nr"
 		ret=1
 		dump_stats=1
@@ -708,12 +870,7 @@ chk_add_nr()
 		echo ""
 	fi
 
-	if [ "${dump_stats}" = 1 ]; then
-		echo Server ns stats
-		ip netns exec $ns1 nstat -as | grep MPTcp
-		echo Client ns stats
-		ip netns exec $ns2 nstat -as | grep MPTcp
-	fi
+	[ "${dump_stats}" = 1 ] && dump_stats
 }
 
 chk_rm_nr()
@@ -756,12 +913,7 @@ chk_rm_nr()
 		echo "[ ok ]"
 	fi
 
-	if [ "${dump_stats}" = 1 ]; then
-		echo Server ns stats
-		ip netns exec $ns1 nstat -as | grep MPTcp
-		echo Client ns stats
-		ip netns exec $ns2 nstat -as | grep MPTcp
-	fi
+	[ "${dump_stats}" = 1 ] && dump_stats
 }
 
 chk_prio_nr()
@@ -793,12 +945,44 @@ chk_prio_nr()
 		echo "[ ok ]"
 	fi
 
-	if [ "${dump_stats}" = 1 ]; then
-		echo Server ns stats
-		ip netns exec $ns1 nstat -as | grep MPTcp
-		echo Client ns stats
-		ip netns exec $ns2 nstat -as | grep MPTcp
+	[ "${dump_stats}" = 1 ] && dump_stats
+}
+
+chk_link_usage()
+{
+	local ns=$1
+	local link=$2
+	local out=$3
+	local expected_rate=$4
+	local tx_link=`ip netns exec $ns cat /sys/class/net/$link/statistics/tx_bytes`
+	local tx_total=`ls -l $out | awk '{print $5}'`
+	local tx_rate=$((tx_link * 100 / $tx_total))
+	local tolerance=5
+
+	printf "%-39s %-18s" " " "link usage"
+	if [ $tx_rate -lt $((expected_rate - $tolerance)) -o \
+	     $tx_rate -gt $((expected_rate + $tolerance)) ]; then
+		echo "[fail] got $tx_rate% usage, expected $expected_rate%"
+		ret=1
+	else
+		echo "[ ok ]"
 	fi
+}
+
+wait_for_tw()
+{
+	local timeout_ms=$((timeout_poll * 1000))
+	local time=0
+	local ns=$1
+
+	while [ $time -lt $timeout_ms ]; do
+		local cnt=$(ip netns exec $ns nstat -as TcpAttemptFails | grep TcpAttemptFails | awk '{print $2}')
+
+		[ "$cnt" = 1 ] && return 1
+		time=$((time + 100))
+		sleep 0.1
+	done
+	return 1
 }
 
 subflows_tests()
@@ -809,12 +993,15 @@ subflows_tests()
 
 	# subflow limited by client
 	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 0
+	ip netns exec $ns2 ./pm_nl_ctl limits 0 0
 	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow
 	run_tests $ns1 $ns2 10.0.1.1
 	chk_join_nr "single subflow, limited by client" 0 0 0
 
 	# subflow limited by server
 	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 0
 	ip netns exec $ns2 ./pm_nl_ctl limits 0 1
 	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow
 	run_tests $ns1 $ns2 10.0.1.1
@@ -837,7 +1024,7 @@ subflows_tests()
 	run_tests $ns1 $ns2 10.0.1.1
 	chk_join_nr "multiple subflows" 2 2 2
 
-	# multiple subflows limited by serverf
+	# multiple subflows limited by server
 	reset
 	ip netns exec $ns1 ./pm_nl_ctl limits 0 1
 	ip netns exec $ns2 ./pm_nl_ctl limits 0 2
@@ -853,6 +1040,61 @@ subflows_tests()
 	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow dev ns2eth3
 	run_tests $ns1 $ns2 10.0.1.1
 	chk_join_nr "single subflow, dev" 1 1 1
+}
+
+subflows_error_tests()
+{
+	# If a single subflow is configured, and matches the MPC src
+	# address, no additional subflow should be created
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 1
+	ip netns exec $ns2 ./pm_nl_ctl limits 0 1
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.1.2 flags subflow
+	run_tests $ns1 $ns2 10.0.1.1 0 0 0 slow
+	chk_join_nr "no MPC reuse with single endpoint" 0 0 0
+
+	# multiple subflows, with subflow creation error
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 2
+	ip netns exec $ns2 ./pm_nl_ctl limits 0 2
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.2.2 flags subflow
+	ip netns exec $ns1 iptables -A INPUT -s 10.0.3.2 -p tcp -j REJECT
+	run_tests $ns1 $ns2 10.0.1.1 0 0 0 slow
+	chk_join_nr "multi subflows, with failing subflow" 1 1 1
+
+	# multiple subflows, with subflow timeout on MPJ
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 2
+	ip netns exec $ns2 ./pm_nl_ctl limits 0 2
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.2.2 flags subflow
+	ip netns exec $ns1 iptables -A INPUT -s 10.0.3.2 -p tcp -j DROP
+	run_tests $ns1 $ns2 10.0.1.1 0 0 0 slow
+	chk_join_nr "multi subflows, with subflow timeout" 1 1 1
+
+	# multiple subflows, check that the endpoint corresponding to
+	# closed subflow (due to reset) is not reused if additional
+	# subflows are added later
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 1
+	ip netns exec $ns2 ./pm_nl_ctl limits 0 1
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow
+	ip netns exec $ns1 iptables -A INPUT -s 10.0.3.2 -p tcp -j REJECT
+	run_tests $ns1 $ns2 10.0.1.1 0 0 0 slow &
+
+	# updates in the child shell do not have any effect here, we
+	# need to bump the test counter for the above case
+	TEST_COUNT=$((TEST_COUNT+1))
+
+	# mpj subflow will be in TW after the reset
+	wait_for_tw $ns2
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.2.2 flags subflow
+	wait
+
+	# additional subflow could be created only if the PM select
+	# the later endpoint, skipping the already used one
+	chk_join_nr "multi subflows, fair usage on close" 1 1 1
 }
 
 signal_address_tests()
@@ -918,20 +1160,108 @@ signal_address_tests()
 	run_tests $ns1 $ns2 10.0.1.1
 	chk_join_nr "signal invalid addresses" 1 1 1
 	chk_add_nr 3 3
+
+	# signal addresses race test
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 4 4
+	ip netns exec $ns2 ./pm_nl_ctl limits 4 4
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.1.1 flags signal
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 flags signal
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.3.1 flags signal
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.4.1 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.1.2 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.2.2 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.4.2 flags signal
+
+	# the peer could possibly miss some addr notification, allow retransmission
+	ip netns exec $ns1 sysctl -q net.mptcp.add_addr_timeout=1
+	run_tests $ns1 $ns2 10.0.1.1 0 0 0 slow
+	chk_join_nr "signal addresses race test" 3 3 3
+
+	# the server will not signal the address terminating
+	# the MPC subflow
+	chk_add_nr 3 3
 }
 
 link_failure_tests()
 {
 	# accept and use add_addr with additional subflows and link loss
 	reset
+
+	# without any b/w limit each veth could spool the packets and get
+	# them acked at xmit time, so that the corresponding subflow will
+	# have almost always no outstanding pkts, the scheduler will pick
+	# always the first subflow and we will have hard time testing
+	# active backup and link switch-over.
+	# Let's set some arbitrary (low) virtual link limits.
+	init_shapers
 	ip netns exec $ns1 ./pm_nl_ctl limits 0 3
-	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 flags signal
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 dev ns1eth2 flags signal
 	ip netns exec $ns2 ./pm_nl_ctl limits 1 3
-	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow
-	ip netns exec $ns2 ./pm_nl_ctl add 10.0.4.2 flags subflow
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 dev ns2eth3 flags subflow
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.4.2 dev ns2eth4 flags subflow
 	run_tests $ns1 $ns2 10.0.1.1 1
 	chk_join_nr "multiple flows, signal, link failure" 3 3 3
 	chk_add_nr 1 1
+	chk_stale_nr $ns2 1 5 1
+
+	# accept and use add_addr with additional subflows and link loss
+	# for bidirectional transfer
+	reset
+	init_shapers
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 3
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 dev ns1eth2 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 3
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 dev ns2eth3 flags subflow
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.4.2 dev ns2eth4 flags subflow
+	run_tests $ns1 $ns2 10.0.1.1 2
+	chk_join_nr "multi flows, signal, bidi, link fail" 3 3 3
+	chk_add_nr 1 1
+	chk_stale_nr $ns2 1 -1 1
+
+	# 2 subflows plus 1 backup subflow with a lossy link, backup
+	# will never be used
+	reset
+	init_shapers
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 2
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 dev ns1eth2 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 2
+	export FAILING_LINKS="1"
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 dev ns2eth3 flags subflow,backup
+	run_tests $ns1 $ns2 10.0.1.1 1
+	chk_join_nr "backup subflow unused, link failure" 2 2 2
+	chk_add_nr 1 1
+	chk_link_usage $ns2 ns2eth3 $cinsent 0
+
+	# 2 lossy links after half transfer, backup will get half of
+	# the traffic
+	reset
+	init_shapers
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 2
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 dev ns1eth2 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 2
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 dev ns2eth3 flags subflow,backup
+	export FAILING_LINKS="1 2"
+	run_tests $ns1 $ns2 10.0.1.1 1
+	chk_join_nr "backup flow used, multi links fail" 2 2 2
+	chk_add_nr 1 1
+	chk_stale_nr $ns2 2 4 2
+	chk_link_usage $ns2 ns2eth3 $cinsent 50
+
+	# use a backup subflow with the first subflow on a lossy link
+	# for bidirectional transfer
+	reset
+	init_shapers
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 2
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 dev ns1eth2 flags signal
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 3
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 dev ns2eth3 flags subflow,backup
+	run_tests $ns1 $ns2 10.0.1.1 2
+	chk_join_nr "backup flow used, bidi, link failure" 2 2 2
+	chk_add_nr 1 1
+	chk_stale_nr $ns2 1 -1 2
+	chk_link_usage $ns2 ns2eth3 $cinsent 50
 }
 
 add_addr_timeout_tests()
@@ -1166,7 +1496,7 @@ ipv6_tests()
 	reset
 	ip netns exec $ns1 ./pm_nl_ctl limits 0 1
 	ip netns exec $ns2 ./pm_nl_ctl limits 0 1
-	ip netns exec $ns2 ./pm_nl_ctl add dead:beef:3::2 flags subflow
+	ip netns exec $ns2 ./pm_nl_ctl add dead:beef:3::2 dev ns2eth3 flags subflow
 	run_tests $ns1 $ns2 dead:beef:1::1 0 0 0 slow
 	chk_join_nr "single subflow IPv6" 1 1 1
 
@@ -1201,7 +1531,7 @@ ipv6_tests()
 	ip netns exec $ns1 ./pm_nl_ctl limits 0 2
 	ip netns exec $ns1 ./pm_nl_ctl add dead:beef:2::1 flags signal
 	ip netns exec $ns2 ./pm_nl_ctl limits 1 2
-	ip netns exec $ns2 ./pm_nl_ctl add dead:beef:3::2 flags subflow
+	ip netns exec $ns2 ./pm_nl_ctl add dead:beef:3::2 dev ns2eth3 flags subflow
 	run_tests $ns1 $ns2 dead:beef:1::1 0 -1 -1 slow
 	chk_join_nr "remove subflow and signal IPv6" 2 2 2
 	chk_add_nr 1 1
@@ -1357,7 +1687,7 @@ add_addr_ports_tests()
 	ip netns exec $ns2 ./pm_nl_ctl limits 1 3
 	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow
 	ip netns exec $ns2 ./pm_nl_ctl add 10.0.4.2 flags subflow
-	run_tests $ns1 $ns2 10.0.1.1 0 -8 -8 slow
+	run_tests $ns1 $ns2 10.0.1.1 0 -8 -2 slow
 	chk_join_nr "flush subflows and signal with port" 3 3 3
 	chk_add_nr 1 1
 	chk_rm_nr 2 2
@@ -1530,9 +1860,59 @@ deny_join_id0_tests()
 	chk_join_nr "subflow and address allow join id0 2" 1 1 1
 }
 
+fullmesh_tests()
+{
+	# fullmesh 1
+	# 2 fullmesh addrs in ns2, added before the connection,
+	# 1 non-fullmesh addr in ns1, added during the connection.
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 0 4
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 4
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.2.2 flags subflow,fullmesh
+	ip netns exec $ns2 ./pm_nl_ctl add 10.0.3.2 flags subflow,fullmesh
+	run_tests $ns1 $ns2 10.0.1.1 0 1 0 slow
+	chk_join_nr "fullmesh test 2x1" 4 4 4
+	chk_add_nr 1 1
+
+	# fullmesh 2
+	# 1 non-fullmesh addr in ns1, added before the connection,
+	# 1 fullmesh addr in ns2, added during the connection.
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 1 3
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 3
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 flags signal
+	run_tests $ns1 $ns2 10.0.1.1 0 0 fullmesh_1 slow
+	chk_join_nr "fullmesh test 1x1" 3 3 3
+	chk_add_nr 1 1
+
+	# fullmesh 3
+	# 1 non-fullmesh addr in ns1, added before the connection,
+	# 2 fullmesh addrs in ns2, added during the connection.
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 2 5
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 5
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 flags signal
+	run_tests $ns1 $ns2 10.0.1.1 0 0 fullmesh_2 slow
+	chk_join_nr "fullmesh test 1x2" 5 5 5
+	chk_add_nr 1 1
+
+	# fullmesh 4
+	# 1 non-fullmesh addr in ns1, added before the connection,
+	# 2 fullmesh addrs in ns2, added during the connection,
+	# limit max_subflows to 4.
+	reset
+	ip netns exec $ns1 ./pm_nl_ctl limits 2 4
+	ip netns exec $ns2 ./pm_nl_ctl limits 1 4
+	ip netns exec $ns1 ./pm_nl_ctl add 10.0.2.1 flags signal
+	run_tests $ns1 $ns2 10.0.1.1 0 0 fullmesh_2 slow
+	chk_join_nr "fullmesh test 1x2, limited" 4 4 4
+	chk_add_nr 1 1
+}
+
 all_tests()
 {
 	subflows_tests
+	subflows_error_tests
 	signal_address_tests
 	link_failure_tests
 	add_addr_timeout_tests
@@ -1545,12 +1925,14 @@ all_tests()
 	syncookies_tests
 	checksum_tests
 	deny_join_id0_tests
+	fullmesh_tests
 }
 
 usage()
 {
 	echo "mptcp_join usage:"
 	echo "  -f subflows_tests"
+	echo "  -e subflows_error_tests"
 	echo "  -s signal_address_tests"
 	echo "  -l link_failure_tests"
 	echo "  -t add_addr_timeout_tests"
@@ -1563,6 +1945,7 @@ usage()
 	echo "  -k syncookies_tests"
 	echo "  -S checksum_tests"
 	echo "  -d deny_join_id0_tests"
+	echo "  -m fullmesh_tests"
 	echo "  -c capture pcap files"
 	echo "  -C enable data checksum"
 	echo "  -h help"
@@ -1598,10 +1981,13 @@ if [ $do_all_tests -eq 1 ]; then
 	exit $ret
 fi
 
-while getopts 'fsltra64bpkdchCS' opt; do
+while getopts 'fesltra64bpkdmchCS' opt; do
 	case $opt in
 		f)
 			subflows_tests
+			;;
+		e)
+			subflows_error_tests
 			;;
 		s)
 			signal_address_tests
@@ -1638,6 +2024,9 @@ while getopts 'fsltra64bpkdchCS' opt; do
 			;;
 		d)
 			deny_join_id0_tests
+			;;
+		m)
+			fullmesh_tests
 			;;
 		c)
 			;;

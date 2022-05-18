@@ -8,12 +8,6 @@ enum {
 	MLX5DR_STE_LU_TYPE_DONT_CARE			= 0x0f,
 };
 
-enum mlx5dr_ste_entry_type {
-	MLX5DR_STE_TYPE_TX		= 1,
-	MLX5DR_STE_TYPE_RX		= 2,
-	MLX5DR_STE_TYPE_MODIFY_PKT	= 6,
-};
-
 struct mlx5_ifc_ste_general_bits {
 	u8         entry_type[0x4];
 	u8         reserved_at_4[0x4];
@@ -453,6 +447,14 @@ struct mlx5_ifc_ste_flex_parser_1_bits {
 	u8         flex_parser_4[0x20];
 };
 
+struct mlx5_ifc_ste_flex_parser_ok_bits {
+	u8         flex_parser_3[0x20];
+	u8         flex_parser_2[0x20];
+	u8         flex_parsers_ok[0x8];
+	u8         reserved_at_48[0x18];
+	u8         flex_parser_0[0x20];
+};
+
 struct mlx5_ifc_ste_flex_parser_tnl_bits {
 	u8         flex_parser_tunneling_header_63_32[0x20];
 
@@ -492,6 +494,14 @@ struct mlx5_ifc_ste_flex_parser_tnl_gtpu_bits {
 	u8	   reserved_at_10[0x10];
 
 	u8	   gtpu_teid[0x20];
+
+	u8	   reserved_at_40[0x40];
+};
+
+struct mlx5_ifc_ste_tunnel_header_bits {
+	u8	   tunnel_header_0[0x20];
+
+	u8	   tunnel_header_1[0x20];
 
 	u8	   reserved_at_40[0x40];
 };

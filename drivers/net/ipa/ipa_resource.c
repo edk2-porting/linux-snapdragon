@@ -29,7 +29,6 @@
 static bool ipa_resource_limits_valid(struct ipa *ipa,
 				      const struct ipa_resource_data *data)
 {
-#ifdef IPA_VALIDATION
 	u32 group_count;
 	u32 i;
 	u32 j;
@@ -53,7 +52,7 @@ static bool ipa_resource_limits_valid(struct ipa *ipa,
 				return false;
 	}
 
-	group_count = data->rsrc_group_src_count;
+	group_count = data->rsrc_group_dst_count;
 	if (!group_count || group_count > IPA_RESOURCE_GROUP_MAX)
 		return false;
 
@@ -65,7 +64,7 @@ static bool ipa_resource_limits_valid(struct ipa *ipa,
 			if (resource->limits[j].min || resource->limits[j].max)
 				return false;
 	}
-#endif /* !IPA_VALIDATION */
+
 	return true;
 }
 

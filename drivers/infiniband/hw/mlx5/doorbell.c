@@ -32,6 +32,7 @@
 
 #include <linux/kref.h>
 #include <linux/slab.h>
+#include <linux/sched/mm.h>
 #include <rdma/ib_umem.h>
 
 #include "mlx5_ib.h"
@@ -78,7 +79,8 @@ int mlx5_ib_db_map_user(struct mlx5_ib_ucontext *context, unsigned long virt,
 	list_add(&page->list, &context->db_page_list);
 
 found:
-	db->dma = sg_dma_address(page->umem->sg_head.sgl) + (virt & ~PAGE_MASK);
+	db->dma = sg_dma_address(page->umem->sgt_append.sgt.sgl) +
+		  (virt & ~PAGE_MASK);
 	db->u.user_page = page;
 	++page->refcnt;
 

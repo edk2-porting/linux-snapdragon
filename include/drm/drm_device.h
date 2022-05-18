@@ -6,16 +6,13 @@
 #include <linux/mutex.h>
 #include <linux/idr.h>
 
-#include <drm/drm_hashtab.h>
+#include <drm/drm_legacy.h>
 #include <drm/drm_mode_config.h>
 
 struct drm_driver;
 struct drm_minor;
 struct drm_master;
-struct drm_device_dma;
 struct drm_vblank_crtc;
-struct drm_sg_mem;
-struct drm_local_map;
 struct drm_vma_offset_manager;
 struct drm_vram_mm;
 struct drm_fb_helper;
@@ -192,20 +189,6 @@ struct drm_device {
 	struct list_head clientlist;
 
 	/**
-	 * @irq_enabled:
-	 *
-	 * Indicates that interrupt handling is enabled, specifically vblank
-	 * handling. Drivers which don't use drm_irq_install() need to set this
-	 * to true manually.
-	 */
-	bool irq_enabled;
-
-	/**
-	 * @irq: Used by the drm_irq_install() and drm_irq_unistall() helpers.
-	 */
-	int irq;
-
-	/**
 	 * @vblank_disable_immediate:
 	 *
 	 * If true, vblank interrupt will be disabled immediately when the
@@ -372,6 +355,10 @@ struct drm_device {
 
 	/* Scatter gather memory */
 	struct drm_sg_mem *sg;
+
+	/* IRQs */
+	bool irq_enabled;
+	int irq;
 #endif
 };
 

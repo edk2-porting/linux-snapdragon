@@ -31,13 +31,16 @@ extern bool dbg;
 #define IS_VALID_PAE_ROOT(x)	(!!(x))
 
 struct kvm_mmu_page {
+	/*
+	 * Note, "link" through "spt" fit in a single 64 byte cache line on
+	 * 64-bit kernels, keep it that way unless there's a reason not to.
+	 */
 	struct list_head link;
 	struct hlist_node hash_link;
-	struct list_head lpage_disallowed_link;
 
+	bool tdp_mmu_page;
 	bool unsync;
 	u8 mmu_valid_gen;
-	bool mmio_cached;
 	bool lpage_disallowed; /* Can't be replaced by an equiv large page */
 
 	/*
@@ -59,6 +62,7 @@ struct kvm_mmu_page {
 	struct kvm_rmap_head parent_ptes; /* rmap pointers to parent sptes */
 	DECLARE_BITMAP(unsync_child_bitmap, 512);
 
+	struct list_head lpage_disallowed_link;
 #ifdef CONFIG_X86_32
 	/*
 	 * Used out of the mmu-lock to avoid reading spte values while an
@@ -71,8 +75,6 @@ struct kvm_mmu_page {
 	atomic_t write_flooding_count;
 
 #ifdef CONFIG_X86_64
-	bool tdp_mmu_page;
-
 	/* Used for freeing the page asynchronously if it is a TDP MMU page. */
 	struct rcu_head rcu_head;
 #endif
@@ -102,7 +104,7 @@ static inline int kvm_mmu_page_as_id(struct kvm_mmu_page *sp)
 	return kvm_mmu_role_as_id(sp->role);
 }
 
-static inline bool kvm_vcpu_ad_need_write_protect(struct kvm_vcpu *vcpu)
+static inline bool kvm_mmu_page_ad_need_write_protect(struct kvm_mmu_page *sp)
 {
 	/*
 	 * When using the EPT page-modification log, the GPAs in the CPU dirty
@@ -110,27 +112,22 @@ static inline bool kvm_vcpu_ad_need_write_protect(struct kvm_vcpu *vcpu)
 	 * on write protection to record dirty pages, which bypasses PML, since
 	 * writes now result in a vmexit.  Note, the check on CPU dirty logging
 	 * being enabled is mandatory as the bits used to denote WP-only SPTEs
-	 * are reserved for NPT w/ PAE (32-bit KVM).
+	 * are reserved for PAE paging (32-bit KVM).
 	 */
-	return vcpu->arch.mmu == &vcpu->arch.guest_mmu &&
-	       kvm_x86_ops.cpu_dirty_log_size;
+	return kvm_x86_ops.cpu_dirty_log_size && sp->role.guest_mode;
 }
 
-extern int nx_huge_pages;
-static inline bool is_nx_huge_page_enabled(void)
-{
-	return READ_ONCE(nx_huge_pages);
-}
+int mmu_try_to_unsync_pages(struct kvm *kvm, const struct kvm_memory_slot *slot,
+			    gfn_t gfn, bool can_unsync, bool prefetch);
 
-int mmu_try_to_unsync_pages(struct kvm_vcpu *vcpu, gfn_t gfn, bool can_unsync);
-
-void kvm_mmu_gfn_disallow_lpage(struct kvm_memory_slot *slot, gfn_t gfn);
-void kvm_mmu_gfn_allow_lpage(struct kvm_memory_slot *slot, gfn_t gfn);
+void kvm_mmu_gfn_disallow_lpage(const struct kvm_memory_slot *slot, gfn_t gfn);
+void kvm_mmu_gfn_allow_lpage(const struct kvm_memory_slot *slot, gfn_t gfn);
 bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 				    struct kvm_memory_slot *slot, u64 gfn,
 				    int min_level);
 void kvm_flush_remote_tlbs_with_address(struct kvm *kvm,
 					u64 start_gfn, u64 pages);
+unsigned int pte_list_count(struct kvm_rmap_head *rmap_head);
 
 /*
  * Return values of handle_mmio_page_fault, mmu.page_fault, and fast_page_fault().
@@ -140,6 +137,9 @@ void kvm_flush_remote_tlbs_with_address(struct kvm *kvm,
  * RET_PF_INVALID: the spte is invalid, let the real page fault path update it.
  * RET_PF_FIXED: The faulting entry has been fixed.
  * RET_PF_SPURIOUS: The faulting entry was already fixed, e.g. by another vCPU.
+ *
+ * Any names added to this enum should be exported to userspace for use in
+ * tracepoints via TRACE_DEFINE_ENUM() in mmutrace.h
  */
 enum {
 	RET_PF_RETRY = 0,
@@ -149,19 +149,11 @@ enum {
 	RET_PF_SPURIOUS,
 };
 
-/* Bits which may be returned by set_spte() */
-#define SET_SPTE_WRITE_PROTECTED_PT	BIT(0)
-#define SET_SPTE_NEED_REMOTE_TLB_FLUSH	BIT(1)
-#define SET_SPTE_SPURIOUS		BIT(2)
-
 int kvm_mmu_max_mapping_level(struct kvm *kvm,
 			      const struct kvm_memory_slot *slot, gfn_t gfn,
 			      kvm_pfn_t pfn, int max_level);
-int kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, gfn_t gfn,
-			    int max_level, kvm_pfn_t *pfnp,
-			    bool huge_page_disallowed, int *req_level);
-void disallowed_hugepage_adjust(u64 spte, gfn_t gfn, int cur_level,
-				kvm_pfn_t *pfnp, int *goal_levelp);
+void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault);
+void disallowed_hugepage_adjust(struct kvm_page_fault *fault, u64 spte, int cur_level);
 
 void *mmu_memory_cache_alloc(struct kvm_mmu_memory_cache *mc);
 

@@ -1426,7 +1426,7 @@ static int __tipc_sendmsg(struct socket *sock, struct msghdr *m, size_t dlen)
 	if (ua) {
 		if (!tipc_uaddr_valid(ua, m->msg_namelen))
 			return -EINVAL;
-		 atype = ua->addrtype;
+		atype = ua->addrtype;
 	}
 
 	/* If socket belongs to a communication group follow other paths */
@@ -1460,6 +1460,8 @@ static int __tipc_sendmsg(struct socket *sock, struct msghdr *m, size_t dlen)
 			tsk->conn_addrtype = atype;
 		msg_set_syn(hdr, 1);
 	}
+
+	memset(&skaddr, 0, sizeof(skaddr));
 
 	/* Determine destination */
 	if (atype == TIPC_SERVICE_RANGE) {
@@ -2850,7 +2852,8 @@ static void tipc_sk_retry_connect(struct sock *sk, struct sk_buff_head *list)
 
 	/* Try again later if dest link is congested */
 	if (tsk->cong_link_cnt) {
-		sk_reset_timer(sk, &sk->sk_timer, msecs_to_jiffies(100));
+		sk_reset_timer(sk, &sk->sk_timer,
+			       jiffies + msecs_to_jiffies(100));
 		return;
 	}
 	/* Prepare SYN for retransmit */
@@ -3747,7 +3750,7 @@ static int __tipc_nl_list_sk_publ(struct sk_buff *skb,
 			if (p->key == *last_publ)
 				break;
 		}
-		if (p->key != *last_publ) {
+		if (list_entry_is_head(p, &tsk->publications, binding_sock)) {
 			/* We never set seq or call nl_dump_check_consistent()
 			 * this means that setting prev_seq here will cause the
 			 * consistence check to fail in the netlink callback

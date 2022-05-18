@@ -48,8 +48,8 @@ properties:
       and the instance to use in the second cell
 
   mdio:
-    type: object
-    $ref: "mdio.yaml#"
+    $ref: mdio.yaml#
+    unevaluatedProperties: false
     description: optional node for embedded MDIO controller
 
 required:
@@ -71,7 +71,6 @@ examples:
     ethernet@c8009000 {
       compatible = "intel,ixp4xx-ethernet";
       reg = <0xc8009000 0x1000>;
-      status = "disabled";
       queue-rx = <&qmgr 4>;
       queue-txready = <&qmgr 21>;
       intel,npe-handle = <&npe 1>;
@@ -82,7 +81,6 @@ examples:
     ethernet@c800c000 {
       compatible = "intel,ixp4xx-ethernet";
       reg = <0xc800c000 0x1000>;
-      status = "disabled";
       queue-rx = <&qmgr 3>;
       queue-txready = <&qmgr 20>;
       intel,npe-handle = <&npe 2>;

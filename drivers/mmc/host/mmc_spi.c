@@ -180,7 +180,7 @@ static int mmc_spi_skip(struct mmc_spi_host *host, unsigned long timeout,
 	u8 *cp = host->data->status;
 	unsigned long start = jiffies;
 
-	while (1) {
+	do {
 		int		status;
 		unsigned	i;
 
@@ -193,16 +193,9 @@ static int mmc_spi_skip(struct mmc_spi_host *host, unsigned long timeout,
 				return cp[i];
 		}
 
-		if (time_is_before_jiffies(start + timeout))
-			break;
-
-		/* If we need long timeouts, we may release the CPU.
-		 * We use jiffies here because we want to have a relation
-		 * between elapsed time and the blocking of the scheduler.
-		 */
-		if (time_is_before_jiffies(start + 1))
-			schedule();
-	}
+		/* If we need long timeouts, we may release the CPU */
+		cond_resched();
+	} while (time_is_after_jiffies(start + timeout));
 	return -ETIMEDOUT;
 }
 
@@ -554,7 +547,7 @@ mmc_spi_command_send(struct mmc_spi_host *host,
 static void
 mmc_spi_setup_data_message(
 	struct mmc_spi_host	*host,
-	int			multiple,
+	bool			multiple,
 	enum dma_data_direction	direction)
 {
 	struct spi_transfer	*t;
@@ -866,14 +859,14 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 	struct spi_device	*spi = host->spi;
 	struct device		*dma_dev = host->dma_dev;
 	struct spi_transfer	*t;
-	enum dma_data_direction	direction;
+	enum dma_data_direction	direction = mmc_get_dma_dir(data);
 	struct scatterlist	*sg;
 	unsigned		n_sg;
-	int			multiple = (data->blocks > 1);
+	bool			multiple = (data->blocks > 1);
+	const char		*write_or_read = (direction == DMA_TO_DEVICE) ? "write" : "read";
 	u32			clock_rate;
 	unsigned long		timeout;
 
-	direction = mmc_get_dma_dir(data);
 	mmc_spi_setup_data_message(host, multiple, direction);
 	t = &host->t;
 
@@ -928,9 +921,7 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 		while (length) {
 			t->len = min(length, blk_size);
 
-			dev_dbg(&host->spi->dev, "    %s block, %d bytes\n",
-				(direction == DMA_TO_DEVICE) ? "write" : "read",
-				t->len);
+			dev_dbg(&spi->dev, "    %s block, %d bytes\n", write_or_read, t->len);
 
 			if (direction == DMA_TO_DEVICE)
 				status = mmc_spi_writeblock(host, t, timeout);
@@ -948,16 +939,14 @@ mmc_spi_data_do(struct mmc_spi_host *host, struct mmc_command *cmd,
 
 		/* discard mappings */
 		if (direction == DMA_FROM_DEVICE)
-			flush_kernel_dcache_page(sg_page(sg));
+			flush_dcache_page(sg_page(sg));
 		kunmap(sg_page(sg));
 		if (dma_dev)
 			dma_unmap_page(dma_dev, dma_addr, PAGE_SIZE, dir);
 
 		if (status < 0) {
 			data->error = status;
-			dev_dbg(&spi->dev, "%s status %d\n",
-				(direction == DMA_TO_DEVICE) ? "write" : "read",
-				status);
+			dev_dbg(&spi->dev, "%s status %d\n", write_or_read, status);
 			break;
 		}
 	}
@@ -1521,6 +1510,12 @@ static int mmc_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
+static const struct spi_device_id mmc_spi_dev_ids[] = {
+	{ "mmc-spi-slot"},
+	{ },
+};
+MODULE_DEVICE_TABLE(spi, mmc_spi_dev_ids);
+
 static const struct of_device_id mmc_spi_of_match_table[] = {
 	{ .compatible = "mmc-spi-slot", },
 	{},
@@ -1532,6 +1527,7 @@ static struct spi_driver mmc_spi_driver = {
 		.name =		"mmc_spi",
 		.of_match_table = mmc_spi_of_match_table,
 	},
+	.id_table =	mmc_spi_dev_ids,
 	.probe =	mmc_spi_probe,
 	.remove =	mmc_spi_remove,
 };

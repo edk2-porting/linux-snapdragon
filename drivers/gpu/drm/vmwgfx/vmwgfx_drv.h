@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 OR MIT */
 /**************************************************************************
  *
- * Copyright 2009-2015 VMware, Inc., Palo Alto, CA., USA
+ * Copyright 2009-2021 VMware, Inc., Palo Alto, CA., USA
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -34,7 +34,6 @@
 #include <drm/drm_auth.h>
 #include <drm/drm_device.h>
 #include <drm/drm_file.h>
-#include <drm/drm_hashtab.h>
 #include <drm/drm_rect.h>
 
 #include <drm/ttm/ttm_bo_driver.h>
@@ -43,6 +42,7 @@
 #include "ttm_object.h"
 
 #include "vmwgfx_fence.h"
+#include "vmwgfx_hashtab.h"
 #include "vmwgfx_reg.h"
 #include "vmwgfx_validation.h"
 
@@ -54,16 +54,13 @@
 
 
 #define VMWGFX_DRIVER_NAME "vmwgfx"
-#define VMWGFX_DRIVER_DATE "20210218"
+#define VMWGFX_DRIVER_DATE "20211206"
 #define VMWGFX_DRIVER_MAJOR 2
-#define VMWGFX_DRIVER_MINOR 18
-#define VMWGFX_DRIVER_PATCHLEVEL 1
+#define VMWGFX_DRIVER_MINOR 20
+#define VMWGFX_DRIVER_PATCHLEVEL 0
 #define VMWGFX_FIFO_STATIC_SIZE (1024*1024)
-#define VMWGFX_MAX_RELOCATIONS 2048
-#define VMWGFX_MAX_VALIDATIONS 2048
 #define VMWGFX_MAX_DISPLAYS 16
 #define VMWGFX_CMD_BOUNCE_INIT_SIZE 32768
-#define VMWGFX_ENABLE_SCREEN_TARGET_OTABLE 1
 
 #define VMWGFX_PCI_ID_SVGA2              0x0405
 #define VMWGFX_PCI_ID_SVGA3              0x0406
@@ -82,14 +79,18 @@
 			VMWGFX_NUM_GB_SURFACE +\
 			VMWGFX_NUM_GB_SCREEN_TARGET)
 
-#define VMW_PL_GMR (TTM_PL_PRIV + 0)
-#define VMW_PL_MOB (TTM_PL_PRIV + 1)
+#define VMW_PL_GMR      (TTM_PL_PRIV + 0)
+#define VMW_PL_MOB      (TTM_PL_PRIV + 1)
+#define VMW_PL_SYSTEM   (TTM_PL_PRIV + 2)
 
 #define VMW_RES_CONTEXT ttm_driver_type0
 #define VMW_RES_SURFACE ttm_driver_type1
 #define VMW_RES_STREAM ttm_driver_type2
 #define VMW_RES_FENCE ttm_driver_type3
 #define VMW_RES_SHADER ttm_driver_type4
+
+#define MKSSTAT_CAPACITY_LOG2 5U
+#define MKSSTAT_CAPACITY (1U << MKSSTAT_CAPACITY_LOG2)
 
 struct vmw_fpriv {
 	struct ttm_object_file *tfile;
@@ -130,7 +131,7 @@ struct vmw_buffer_object {
  */
 struct vmw_validate_buffer {
 	struct ttm_validate_buffer base;
-	struct drm_hash_item hash;
+	struct vmwgfx_hash_item hash;
 	bool validate_as_mob;
 };
 
@@ -311,7 +312,6 @@ struct vmw_res_cache_entry {
  * enum vmw_dma_map_mode - indicate how to perform TTM page dma mappings.
  */
 enum vmw_dma_map_mode {
-	vmw_dma_phys,           /* Use physical page addresses */
 	vmw_dma_alloc_coherent, /* Use TTM coherent pages */
 	vmw_dma_map_populate,   /* Unmap from DMA just after unpopulate */
 	vmw_dma_map_bind,       /* Unmap from DMA just before unbind */
@@ -330,7 +330,6 @@ struct vmw_sg_table {
 	struct page **pages;
 	const dma_addr_t *addrs;
 	struct sg_table *sgt;
-	unsigned long num_regions;
 	unsigned long num_pages;
 };
 
@@ -356,7 +355,19 @@ struct vmw_piter {
 	unsigned long num_pages;
 	bool (*next)(struct vmw_piter *);
 	dma_addr_t (*dma_address)(struct vmw_piter *);
-	struct page *(*page)(struct vmw_piter *);
+};
+
+
+struct vmw_ttm_tt {
+	struct ttm_tt dma_ttm;
+	struct vmw_private *dev_priv;
+	int gmr_id;
+	struct vmw_mob *mob;
+	int mem_type;
+	struct sg_table sgt;
+	struct vmw_sg_table vsgt;
+	bool mapped;
+	bool bound;
 };
 
 /*
@@ -366,7 +377,8 @@ enum vmw_display_unit_type {
 	vmw_du_invalid = 0,
 	vmw_du_legacy,
 	vmw_du_screen_object,
-	vmw_du_screen_target
+	vmw_du_screen_target,
+	vmw_du_max
 };
 
 struct vmw_validation_context;
@@ -404,10 +416,11 @@ struct vmw_ctx_validation_info;
  * @ctx: The validation context
  */
 struct vmw_sw_context{
-	struct drm_open_hash res_ht;
+	struct vmwgfx_open_hash res_ht;
 	bool res_ht_initialized;
 	bool kernel;
 	struct vmw_fpriv *fp;
+	struct drm_file *filp;
 	uint32_t *cmd_bounce;
 	uint32_t cmd_bounce_size;
 	struct vmw_buffer_object *cur_query_bo;
@@ -471,6 +484,7 @@ enum {
  * @VMW_SM_4: Context support upto SM4.
  * @VMW_SM_4_1: Context support upto SM4_1.
  * @VMW_SM_5: Context support up to SM5.
+ * @VMW_SM_5_1X: Adds support for sm5_1 and gl43 extensions.
  * @VMW_SM_MAX: Should be the last.
  */
 enum vmw_sm_type {
@@ -478,6 +492,7 @@ enum vmw_sm_type {
 	VMW_SM_4,
 	VMW_SM_4_1,
 	VMW_SM_5,
+	VMW_SM_5_1X,
 	VMW_SM_MAX
 };
 
@@ -486,12 +501,11 @@ struct vmw_private {
 	struct ttm_device bdev;
 
 	struct drm_vma_offset_manager vma_manager;
-	unsigned long pci_id;
-	u32 vmw_chipset;
+	u32 pci_id;
 	resource_size_t io_start;
 	resource_size_t vram_start;
 	resource_size_t vram_size;
-	resource_size_t prim_bb_mem;
+	resource_size_t max_primary_mem;
 	u32 __iomem *rmmio;
 	u32 *fifo_mem;
 	resource_size_t fifo_mem_size;
@@ -513,7 +527,6 @@ struct vmw_private {
 	bool has_gmr;
 	bool has_mob;
 	spinlock_t hw_lock;
-	spinlock_t cap_lock;
 	bool assume_16bpp;
 
 	enum vmw_sm_type sm_type;
@@ -627,9 +640,25 @@ struct vmw_private {
 	struct vmw_cmdbuf_man *cman;
 	DECLARE_BITMAP(irqthread_pending, VMW_IRQTHREAD_MAX);
 
-	/* Validation memory reservation */
-	struct vmw_validation_mem vvm;
+	uint32 *devcaps;
+
+	/*
+	 * mksGuestStat instance-descriptor and pid arrays
+	 */
+	struct page *mksstat_user_pages[MKSSTAT_CAPACITY];
+	atomic_t mksstat_user_pids[MKSSTAT_CAPACITY];
+
+#if IS_ENABLED(CONFIG_DRM_VMWGFX_MKSSTATS)
+	struct page *mksstat_kern_pages[MKSSTAT_CAPACITY];
+	u8 mksstat_kern_top_timer[MKSSTAT_CAPACITY];
+	atomic_t mksstat_kern_pids[MKSSTAT_CAPACITY];
+#endif
 };
+
+static inline struct vmw_buffer_object *gem_to_vmw_bo(struct drm_gem_object *gobj)
+{
+	return container_of((gobj), struct vmw_buffer_object, base.base);
+}
 
 static inline struct vmw_surface *vmw_res_to_srf(struct vmw_resource *res)
 {
@@ -724,6 +753,24 @@ static inline bool has_sm5_context(const struct vmw_private *dev_priv)
 	return (dev_priv->sm_type >= VMW_SM_5);
 }
 
+/**
+ * has_gl43_context - Does the device support GL43 context.
+ * @dev_priv: Device private.
+ *
+ * Return: Bool value if device support SM5 context or not.
+ */
+static inline bool has_gl43_context(const struct vmw_private *dev_priv)
+{
+	return (dev_priv->sm_type >= VMW_SM_5_1X);
+}
+
+
+static inline u32 vmw_max_num_uavs(struct vmw_private *dev_priv)
+{
+	return (has_gl43_context(dev_priv) ?
+			SVGA3D_DX11_1_MAX_UAVIEWS : SVGA3D_MAX_UAVIEWS);
+}
+
 extern void vmw_svga_enable(struct vmw_private *dev_priv);
 extern void vmw_svga_disable(struct vmw_private *dev_priv);
 
@@ -753,7 +800,7 @@ extern int vmw_resource_reserve(struct vmw_resource *res, bool interruptible,
 				bool no_backup);
 extern bool vmw_resource_needs_backup(const struct vmw_resource *res);
 extern int vmw_user_lookup_handle(struct vmw_private *dev_priv,
-				  struct ttm_object_file *tfile,
+				  struct drm_file *filp,
 				  uint32_t handle,
 				  struct vmw_surface **out_surf,
 				  struct vmw_buffer_object **out_buf);
@@ -819,6 +866,7 @@ static inline void vmw_user_resource_noref_release(void)
 /**
  * Buffer object helper functions - vmwgfx_bo.c
  */
+extern bool vmw_bo_is_vmw_bo(struct ttm_buffer_object *bo);
 extern int vmw_bo_pin_in_placement(struct vmw_private *vmw_priv,
 				   struct vmw_buffer_object *bo,
 				   struct ttm_placement *placement,
@@ -843,32 +891,23 @@ extern int vmw_bo_create_kernel(struct vmw_private *dev_priv,
 				unsigned long size,
 				struct ttm_placement *placement,
 				struct ttm_buffer_object **p_bo);
+extern int vmw_bo_create(struct vmw_private *dev_priv,
+			 size_t size, struct ttm_placement *placement,
+			 bool interruptible, bool pin,
+			 void (*bo_free)(struct ttm_buffer_object *bo),
+			 struct vmw_buffer_object **p_bo);
 extern int vmw_bo_init(struct vmw_private *dev_priv,
 		       struct vmw_buffer_object *vmw_bo,
 		       size_t size, struct ttm_placement *placement,
 		       bool interruptible, bool pin,
 		       void (*bo_free)(struct ttm_buffer_object *bo));
-extern int vmw_user_bo_verify_access(struct ttm_buffer_object *bo,
-				     struct ttm_object_file *tfile);
-extern int vmw_user_bo_alloc(struct vmw_private *dev_priv,
-			     struct ttm_object_file *tfile,
-			     uint32_t size,
-			     bool shareable,
-			     uint32_t *handle,
-			     struct vmw_buffer_object **p_dma_buf,
-			     struct ttm_base_object **p_base);
-extern int vmw_user_bo_reference(struct ttm_object_file *tfile,
-				 struct vmw_buffer_object *dma_buf,
-				 uint32_t *handle);
-extern int vmw_bo_alloc_ioctl(struct drm_device *dev, void *data,
-			      struct drm_file *file_priv);
 extern int vmw_bo_unref_ioctl(struct drm_device *dev, void *data,
 			      struct drm_file *file_priv);
 extern int vmw_user_bo_synccpu_ioctl(struct drm_device *dev, void *data,
 				     struct drm_file *file_priv);
-extern int vmw_user_bo_lookup(struct ttm_object_file *tfile,
-			      uint32_t id, struct vmw_buffer_object **out,
-			      struct ttm_base_object **base);
+extern int vmw_user_bo_lookup(struct drm_file *filp,
+			      uint32_t handle,
+			      struct vmw_buffer_object **out);
 extern void vmw_bo_fence_single(struct ttm_buffer_object *bo,
 				struct vmw_fence_obj *fence);
 extern void *vmw_bo_map_and_cache(struct vmw_buffer_object *vbo);
@@ -877,16 +916,7 @@ extern void vmw_bo_move_notify(struct ttm_buffer_object *bo,
 			       struct ttm_resource *mem);
 extern void vmw_bo_swap_notify(struct ttm_buffer_object *bo);
 extern struct vmw_buffer_object *
-vmw_user_bo_noref_lookup(struct ttm_object_file *tfile, u32 handle);
-
-/**
- * vmw_user_bo_noref_release - release a buffer object pointer looked up
- * without reference
- */
-static inline void vmw_user_bo_noref_release(void)
-{
-	ttm_base_object_noref_release();
-}
+vmw_user_bo_noref_lookup(struct drm_file *filp, u32 handle);
 
 /**
  * vmw_bo_adjust_prio - Adjust the buffer object eviction priority
@@ -936,6 +966,19 @@ static inline void vmw_bo_prio_del(struct vmw_buffer_object *vbo, int prio)
 	if (--vbo->res_prios[prio] == 0)
 		vmw_bo_prio_adjust(vbo);
 }
+
+/**
+ * GEM related functionality - vmwgfx_gem.c
+ */
+extern int vmw_gem_object_create_with_handle(struct vmw_private *dev_priv,
+					     struct drm_file *filp,
+					     uint32_t size,
+					     uint32_t *handle,
+					     struct vmw_buffer_object **p_vbo);
+extern int vmw_gem_object_create_ioctl(struct drm_device *dev, void *data,
+				       struct drm_file *filp);
+extern void vmw_gem_destroy(struct ttm_buffer_object *bo);
+extern void vmw_debugfs_gem_init(struct vmw_private *vdev);
 
 /**
  * Misc Ioctl functionality - vmwgfx_ioctl.c
@@ -1013,9 +1056,6 @@ vmw_is_cursor_bypass3_enabled(const struct vmw_private *dev_priv)
 
 extern int vmw_mmap(struct file *filp, struct vm_area_struct *vma);
 
-extern void vmw_validation_mem_init_ttm(struct vmw_private *dev_priv,
-					size_t gran);
-
 /**
  * TTM buffer object driver - vmwgfx_ttm_buffer.c
  */
@@ -1025,7 +1065,6 @@ extern struct ttm_placement vmw_vram_placement;
 extern struct ttm_placement vmw_vram_sys_placement;
 extern struct ttm_placement vmw_vram_gmr_placement;
 extern struct ttm_placement vmw_sys_placement;
-extern struct ttm_placement vmw_evictable_placement;
 extern struct ttm_placement vmw_srf_placement;
 extern struct ttm_placement vmw_mob_placement;
 extern struct ttm_placement vmw_nonfixed_placement;
@@ -1073,7 +1112,7 @@ static inline dma_addr_t vmw_piter_dma_addr(struct vmw_piter *viter)
  */
 static inline struct page *vmw_piter_page(struct vmw_piter *viter)
 {
-	return viter->page(viter);
+	return viter->pages[viter->i];
 }
 
 /**
@@ -1101,15 +1140,14 @@ extern int vmw_execbuf_fence_commands(struct drm_file *file_priv,
 				      struct vmw_private *dev_priv,
 				      struct vmw_fence_obj **p_fence,
 				      uint32_t *p_handle);
-extern void vmw_execbuf_copy_fence_user(struct vmw_private *dev_priv,
+extern int vmw_execbuf_copy_fence_user(struct vmw_private *dev_priv,
 					struct vmw_fpriv *vmw_fp,
 					int ret,
 					struct drm_vmw_fence_rep __user
 					*user_fence_rep,
 					struct vmw_fence_obj *fence,
 					uint32_t fence_handle,
-					int32_t out_fence_fd,
-					struct sync_file *sync_file);
+					int32_t out_fence_fd);
 bool vmw_cmd_describe(const void *buf, u32 *size, char const **cmd);
 
 /**
@@ -1204,13 +1242,6 @@ void vmw_kms_lost_device(struct drm_device *dev);
 int vmw_dumb_create(struct drm_file *file_priv,
 		    struct drm_device *dev,
 		    struct drm_mode_create_dumb *args);
-
-int vmw_dumb_map_offset(struct drm_file *file_priv,
-			struct drm_device *dev, uint32_t handle,
-			uint64_t *offset);
-int vmw_dumb_destroy(struct drm_file *file_priv,
-		     struct drm_device *dev,
-		     uint32_t handle);
 extern int vmw_resource_pin(struct vmw_resource *res, bool interruptible);
 extern void vmw_resource_unpin(struct vmw_resource *res);
 extern enum vmw_res_type vmw_res_type(const struct vmw_resource *res);
@@ -1236,6 +1267,12 @@ int vmw_overlay_num_free_overlays(struct vmw_private *dev_priv);
 
 int vmw_gmrid_man_init(struct vmw_private *dev_priv, int type);
 void vmw_gmrid_man_fini(struct vmw_private *dev_priv, int type);
+
+/**
+ * System memory manager
+ */
+int vmw_sys_man_init(struct vmw_private *dev_priv);
+void vmw_sys_man_fini(struct vmw_private *dev_priv);
 
 /**
  * Prime - vmwgfx_prime.c
@@ -1281,7 +1318,6 @@ extern struct vmw_cmdbuf_res_manager *
 vmw_context_res_man(struct vmw_resource *ctx);
 extern struct vmw_resource *vmw_context_cotable(struct vmw_resource *ctx,
 						SVGACOTableType cotable_type);
-extern struct list_head *vmw_context_binding_list(struct vmw_resource *ctx);
 struct vmw_ctx_binding_state;
 extern struct vmw_ctx_binding_state *
 vmw_context_binding_state(struct vmw_resource *ctx);
@@ -1309,18 +1345,6 @@ extern int vmw_gb_surface_define_ioctl(struct drm_device *dev, void *data,
 				       struct drm_file *file_priv);
 extern int vmw_gb_surface_reference_ioctl(struct drm_device *dev, void *data,
 					  struct drm_file *file_priv);
-int vmw_surface_gb_priv_define(struct drm_device *dev,
-			       uint32_t user_accounting_size,
-			       SVGA3dSurfaceAllFlags svga3d_flags,
-			       SVGA3dSurfaceFormat format,
-			       bool for_scanout,
-			       uint32_t num_mip_levels,
-			       uint32_t multisample_count,
-			       uint32_t array_size,
-			       struct drm_vmw_size size,
-			       SVGA3dMSPattern multisample_pattern,
-			       SVGA3dMSQualityLevel quality_level,
-			       struct vmw_surface **srf_out);
 extern int vmw_gb_surface_define_ext_ioctl(struct drm_device *dev,
 					   void *data,
 					   struct drm_file *file_priv);
@@ -1329,7 +1353,6 @@ extern int vmw_gb_surface_reference_ext_ioctl(struct drm_device *dev,
 					      struct drm_file *file_priv);
 
 int vmw_gb_surface_define(struct vmw_private *dev_priv,
-			  uint32_t user_accounting_size,
 			  const struct vmw_surface_metadata *req,
 			  struct vmw_surface **srf_out);
 
@@ -1390,7 +1413,6 @@ void vmw_dx_streamoutput_cotable_list_scrub(struct vmw_private *dev_priv,
 extern struct vmw_cmdbuf_res_manager *
 vmw_cmdbuf_res_man_create(struct vmw_private *dev_priv);
 extern void vmw_cmdbuf_res_man_destroy(struct vmw_cmdbuf_res_manager *man);
-extern size_t vmw_cmdbuf_res_man_size(void);
 extern struct vmw_resource *
 vmw_cmdbuf_res_lookup(struct vmw_cmdbuf_res_manager *man,
 		      enum vmw_cmdbuf_res_type res_type,
@@ -1502,6 +1524,17 @@ __printf(1, 2) int vmw_host_printf(const char *fmt, ...);
 int vmw_msg_ioctl(struct drm_device *dev, void *data,
 		  struct drm_file *file_priv);
 
+/* Host mksGuestStats -vmwgfx_msg.c: */
+int vmw_mksstat_get_kern_slot(pid_t pid, struct vmw_private *dev_priv);
+
+int vmw_mksstat_reset_ioctl(struct drm_device *dev, void *data,
+		      struct drm_file *file_priv);
+int vmw_mksstat_add_ioctl(struct drm_device *dev, void *data,
+		      struct drm_file *file_priv);
+int vmw_mksstat_remove_ioctl(struct drm_device *dev, void *data,
+		      struct drm_file *file_priv);
+int vmw_mksstat_remove_all(struct vmw_private *dev_priv);
+
 /* VMW logging */
 
 /**
@@ -1526,16 +1559,7 @@ void vmw_bo_dirty_unmap(struct vmw_buffer_object *vbo,
 			pgoff_t start, pgoff_t end);
 vm_fault_t vmw_bo_vm_fault(struct vm_fault *vmf);
 vm_fault_t vmw_bo_vm_mkwrite(struct vm_fault *vmf);
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-vm_fault_t vmw_bo_vm_huge_fault(struct vm_fault *vmf,
-				enum page_entry_size pe_size);
-#endif
 
-/* Transparent hugepage support - vmwgfx_thp.c */
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-extern int vmw_thp_init(struct vmw_private *dev_priv);
-void vmw_thp_fini(struct vmw_private *dev_priv);
-#endif
 
 /**
  * VMW_DEBUG_KMS - Debug output for kernel mode-setting
@@ -1578,11 +1602,6 @@ vmw_bo_reference(struct vmw_buffer_object *buf)
 {
 	ttm_bo_get(&buf->base);
 	return buf;
-}
-
-static inline struct ttm_mem_global *vmw_mem_glob(struct vmw_private *dev_priv)
-{
-	return &ttm_mem_glob;
 }
 
 static inline void vmw_fifo_resource_inc(struct vmw_private *dev_priv)

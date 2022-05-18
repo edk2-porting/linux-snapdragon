@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
 /* Copyright (c) 2019 Mellanox Technologies */
 
+#include <linux/mlx5/vport.h>
 #include "mlx5_core.h"
 #include "fs_core.h"
 #include "fs_cmd.h"
@@ -133,6 +134,9 @@ static int mlx5_cmd_dr_modify_flow_table(struct mlx5_flow_root_namespace *ns,
 					 struct mlx5_flow_table *ft,
 					 struct mlx5_flow_table *next_ft)
 {
+	if (mlx5_dr_is_fw_table(ft->flags))
+		return mlx5_fs_cmd_get_fw_cmds()->modify_flow_table(ns, ft, next_ft);
+
 	return set_miss_action(ns, ft, next_ft);
 }
 
@@ -191,6 +195,15 @@ static struct mlx5dr_action *create_vport_action(struct mlx5dr_domain *domain,
 					       dest_attr->vport.vhca_id);
 }
 
+static struct mlx5dr_action *create_uplink_action(struct mlx5dr_domain *domain,
+						  struct mlx5_flow_rule *dst)
+{
+	struct mlx5_flow_destination *dest_attr = &dst->dest_attr;
+
+	return mlx5dr_action_create_dest_vport(domain, MLX5_VPORT_UPLINK, 1,
+					       dest_attr->vport.vhca_id);
+}
+
 static struct mlx5dr_action *create_ft_action(struct mlx5dr_domain *domain,
 					      struct mlx5_flow_rule *dst)
 {
@@ -215,11 +228,16 @@ static struct mlx5dr_action *create_action_push_vlan(struct mlx5dr_domain *domai
 
 static bool contain_vport_reformat_action(struct mlx5_flow_rule *dst)
 {
-	return dst->dest_attr.type == MLX5_FLOW_DESTINATION_TYPE_VPORT &&
+	return (dst->dest_attr.type == MLX5_FLOW_DESTINATION_TYPE_VPORT ||
+		dst->dest_attr.type == MLX5_FLOW_DESTINATION_TYPE_UPLINK) &&
 		dst->dest_attr.vport.flags & MLX5_FLOW_DEST_VPORT_REFORMAT_ID;
 }
 
-#define MLX5_FLOW_CONTEXT_ACTION_MAX  20
+/* We want to support a rule with 32 destinations, which means we need to
+ * account for 32 destinations plus usually a counter plus one more action
+ * for a multi-destination flow table.
+ */
+#define MLX5_FLOW_CONTEXT_ACTION_MAX  34
 static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 				  struct mlx5_flow_table *ft,
 				  struct mlx5_flow_group *group,
@@ -389,9 +407,9 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 			enum mlx5_flow_destination_type type = dst->dest_attr.type;
 			u32 id;
 
-			if (num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX ||
-			    num_term_actions >= MLX5_FLOW_CONTEXT_ACTION_MAX) {
-				err = -ENOSPC;
+			if (fs_dr_num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX ||
+			    num_term_actions == MLX5_FLOW_CONTEXT_ACTION_MAX) {
+				err = -EOPNOTSUPP;
 				goto free_actions;
 			}
 
@@ -408,8 +426,11 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 				fs_dr_actions[fs_dr_num_actions++] = tmp_action;
 				term_actions[num_term_actions++].dest = tmp_action;
 				break;
+			case MLX5_FLOW_DESTINATION_TYPE_UPLINK:
 			case MLX5_FLOW_DESTINATION_TYPE_VPORT:
-				tmp_action = create_vport_action(domain, dst);
+				tmp_action = type == MLX5_FLOW_DESTINATION_TYPE_VPORT ?
+					     create_vport_action(domain, dst) :
+					     create_uplink_action(domain, dst);
 				if (!tmp_action) {
 					err = -ENOMEM;
 					goto free_actions;
@@ -461,8 +482,9 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 			    MLX5_FLOW_DESTINATION_TYPE_COUNTER)
 				continue;
 
-			if (num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX) {
-				err = -ENOSPC;
+			if (num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX ||
+			    fs_dr_num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX) {
+				err = -EOPNOTSUPP;
 				goto free_actions;
 			}
 
@@ -482,14 +504,32 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 	params.match_sz = match_sz;
 	params.match_buf = (u64 *)fte->val;
 	if (num_term_actions == 1) {
-		if (term_actions->reformat)
+		if (term_actions->reformat) {
+			if (num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX) {
+				err = -EOPNOTSUPP;
+				goto free_actions;
+			}
 			actions[num_actions++] = term_actions->reformat;
+		}
 
+		if (num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX) {
+			err = -EOPNOTSUPP;
+			goto free_actions;
+		}
 		actions[num_actions++] = term_actions->dest;
 	} else if (num_term_actions > 1) {
+		bool ignore_flow_level =
+			!!(fte->action.flags & FLOW_ACT_IGNORE_FLOW_LEVEL);
+
+		if (num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX ||
+		    fs_dr_num_actions == MLX5_FLOW_CONTEXT_ACTION_MAX) {
+			err = -EOPNOTSUPP;
+			goto free_actions;
+		}
 		tmp_action = mlx5dr_action_create_mult_dest_tbl(domain,
 								term_actions,
-								num_term_actions);
+								num_term_actions,
+								ignore_flow_level);
 		if (!tmp_action) {
 			err = -EOPNOTSUPP;
 			goto free_actions;
@@ -557,6 +597,9 @@ static int mlx5_cmd_dr_packet_reformat_alloc(struct mlx5_flow_root_namespace *ns
 	case MLX5_REFORMAT_TYPE_INSERT_HDR:
 		dr_reformat = DR_ACTION_REFORMAT_TYP_INSERT_HDR;
 		break;
+	case MLX5_REFORMAT_TYPE_REMOVE_HDR:
+		dr_reformat = DR_ACTION_REFORMAT_TYP_REMOVE_HDR;
+		break;
 	default:
 		mlx5_core_err(ns->dev, "Packet-reformat not supported(%d)\n",
 			      params->type);
@@ -615,11 +658,15 @@ static void mlx5_cmd_dr_modify_header_dealloc(struct mlx5_flow_root_namespace *n
 	mlx5dr_action_destroy(modify_hdr->action.dr_action);
 }
 
-static int mlx5_cmd_dr_update_fte(struct mlx5_flow_root_namespace *ns,
-				  struct mlx5_flow_table *ft,
-				  struct mlx5_flow_group *group,
-				  int modify_mask,
-				  struct fs_fte *fte)
+static int
+mlx5_cmd_dr_destroy_match_definer(struct mlx5_flow_root_namespace *ns,
+				  int definer_id)
+{
+	return -EOPNOTSUPP;
+}
+
+static int mlx5_cmd_dr_create_match_definer(struct mlx5_flow_root_namespace *ns,
+					    u16 format_id, u32 *match_mask)
 {
 	return -EOPNOTSUPP;
 }
@@ -646,6 +693,36 @@ static int mlx5_cmd_dr_delete_fte(struct mlx5_flow_root_namespace *ns,
 
 	kfree(rule->dr_actions);
 	return 0;
+}
+
+static int mlx5_cmd_dr_update_fte(struct mlx5_flow_root_namespace *ns,
+				  struct mlx5_flow_table *ft,
+				  struct mlx5_flow_group *group,
+				  int modify_mask,
+				  struct fs_fte *fte)
+{
+	struct fs_fte fte_tmp = {};
+	int ret;
+
+	if (mlx5_dr_is_fw_table(ft->flags))
+		return mlx5_fs_cmd_get_fw_cmds()->update_fte(ns, ft, group, modify_mask, fte);
+
+	/* Backup current dr rule details */
+	fte_tmp.fs_dr_rule = fte->fs_dr_rule;
+	memset(&fte->fs_dr_rule, 0, sizeof(struct mlx5_fs_dr_rule));
+
+	/* First add the new updated rule, then delete the old rule */
+	ret = mlx5_cmd_dr_create_fte(ns, ft, group, fte);
+	if (ret)
+		goto restore_fte;
+
+	ret = mlx5_cmd_dr_delete_fte(ns, ft, &fte_tmp);
+	WARN_ONCE(ret, "dr update fte duplicate rule deletion failed\n");
+	return ret;
+
+restore_fte:
+	fte->fs_dr_rule = fte_tmp.fs_dr_rule;
+	return ret;
 }
 
 static int mlx5_cmd_dr_set_peer(struct mlx5_flow_root_namespace *ns,
@@ -696,6 +773,8 @@ static const struct mlx5_flow_cmds mlx5_flow_cmds_dr = {
 	.packet_reformat_dealloc = mlx5_cmd_dr_packet_reformat_dealloc,
 	.modify_header_alloc = mlx5_cmd_dr_modify_header_alloc,
 	.modify_header_dealloc = mlx5_cmd_dr_modify_header_dealloc,
+	.create_match_definer = mlx5_cmd_dr_create_match_definer,
+	.destroy_match_definer = mlx5_cmd_dr_destroy_match_definer,
 	.set_peer = mlx5_cmd_dr_set_peer,
 	.create_ns = mlx5_cmd_dr_create_ns,
 	.destroy_ns = mlx5_cmd_dr_destroy_ns,

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 or Linux-OpenIB
 /* Copyright (c) 2015 - 2021 Intel Corporation */
+#include <linux/etherdevice.h>
+
 #include "osdep.h"
 #include "status.h"
 #include "hmc.h"
@@ -431,7 +433,7 @@ enum irdma_status_code irdma_sc_qp_create(struct irdma_sc_qp *qp, struct irdma_c
 
 	cqp = qp->dev->cqp;
 	if (qp->qp_uk.qp_id < cqp->dev->hw_attrs.min_hw_qp_id ||
-	    qp->qp_uk.qp_id > (cqp->dev->hmc_info->hmc_obj[IRDMA_HMC_IW_QP].max_cnt - 1))
+	    qp->qp_uk.qp_id >= (cqp->dev->hmc_info->hmc_obj[IRDMA_HMC_IW_QP].max_cnt))
 		return IRDMA_ERR_INVALID_QP_ID;
 
 	wqe = irdma_sc_cqp_get_next_send_wqe(cqp, scratch);
@@ -1417,44 +1419,6 @@ void irdma_sc_send_lsmm(struct irdma_sc_qp *qp, void *lsmm_buf, u32 size,
 
 	if (qp->dev->hw_attrs.uk_attrs.feature_flags & IRDMA_FEATURE_RTS_AE)
 		irdma_sc_gen_rts_ae(qp);
-}
-
-/**
- * irdma_sc_send_lsmm_nostag - for privilege qp
- * @qp: sc qp struct
- * @lsmm_buf: buffer with lsmm message
- * @size: size of lsmm buffer
- */
-void irdma_sc_send_lsmm_nostag(struct irdma_sc_qp *qp, void *lsmm_buf, u32 size)
-{
-	__le64 *wqe;
-	u64 hdr;
-	struct irdma_qp_uk *qp_uk;
-
-	qp_uk = &qp->qp_uk;
-	wqe = qp_uk->sq_base->elem;
-
-	set_64bit_val(wqe, 0, (uintptr_t)lsmm_buf);
-
-	if (qp->qp_uk.uk_attrs->hw_rev == IRDMA_GEN_1)
-		set_64bit_val(wqe, 8,
-			      FIELD_PREP(IRDMAQPSQ_GEN1_FRAG_LEN, size));
-	else
-		set_64bit_val(wqe, 8,
-			      FIELD_PREP(IRDMAQPSQ_FRAG_LEN, size) |
-			      FIELD_PREP(IRDMAQPSQ_VALID, qp->qp_uk.swqe_polarity));
-	set_64bit_val(wqe, 16, 0);
-
-	hdr = FIELD_PREP(IRDMAQPSQ_OPCODE, IRDMAQP_OP_RDMA_SEND) |
-	      FIELD_PREP(IRDMAQPSQ_STREAMMODE, 1) |
-	      FIELD_PREP(IRDMAQPSQ_WAITFORRCVPDU, 1) |
-	      FIELD_PREP(IRDMAQPSQ_VALID, qp->qp_uk.swqe_polarity);
-	dma_wmb(); /* make sure WQE is written before valid bit is set */
-
-	set_64bit_val(wqe, 24, hdr);
-
-	print_hex_dump_debug("WQE: SEND_LSMM_NOSTAG WQE", DUMP_PREFIX_OFFSET,
-			     16, 8, wqe, IRDMA_QP_WQE_MIN_SIZE, false);
 }
 
 /**
@@ -2501,7 +2465,6 @@ static inline void irdma_sc_cq_ack(struct irdma_sc_cq *cq)
 enum irdma_status_code irdma_sc_cq_init(struct irdma_sc_cq *cq,
 					struct irdma_cq_init_info *info)
 {
-	enum irdma_status_code ret_code;
 	u32 pble_obj_cnt;
 
 	pble_obj_cnt = info->dev->hmc_info->hmc_obj[IRDMA_HMC_IW_PBLE].cnt;
@@ -2513,9 +2476,7 @@ enum irdma_status_code irdma_sc_cq_init(struct irdma_sc_cq *cq,
 	cq->ceq_id = info->ceq_id;
 	info->cq_uk_init_info.cqe_alloc_db = cq->dev->cq_arm_db;
 	info->cq_uk_init_info.cq_ack_db = cq->dev->cq_ack_db;
-	ret_code = irdma_uk_cq_init(&cq->cq_uk, &info->cq_uk_init_info);
-	if (ret_code)
-		return ret_code;
+	irdma_uk_cq_init(&cq->cq_uk, &info->cq_uk_init_info);
 
 	cq->virtual_map = info->virtual_map;
 	cq->pbl_chunk_size = info->pbl_chunk_size;
@@ -2551,10 +2512,10 @@ static enum irdma_status_code irdma_sc_cq_create(struct irdma_sc_cq *cq,
 	enum irdma_status_code ret_code = 0;
 
 	cqp = cq->dev->cqp;
-	if (cq->cq_uk.cq_id > (cqp->dev->hmc_info->hmc_obj[IRDMA_HMC_IW_CQ].max_cnt - 1))
+	if (cq->cq_uk.cq_id >= (cqp->dev->hmc_info->hmc_obj[IRDMA_HMC_IW_CQ].max_cnt))
 		return IRDMA_ERR_INVALID_CQ_ID;
 
-	if (cq->ceq_id > (cq->dev->hmc_fpm_misc.max_ceqs - 1))
+	if (cq->ceq_id >= (cq->dev->hmc_fpm_misc.max_ceqs))
 		return IRDMA_ERR_INVALID_CEQ_ID;
 
 	ceq = cq->dev->ceq[cq->ceq_id];
@@ -3656,7 +3617,7 @@ enum irdma_status_code irdma_sc_ceq_init(struct irdma_sc_ceq *ceq,
 	    info->elem_cnt > info->dev->hw_attrs.max_hw_ceq_size)
 		return IRDMA_ERR_INVALID_SIZE;
 
-	if (info->ceq_id > (info->dev->hmc_fpm_misc.max_ceqs - 1))
+	if (info->ceq_id >= (info->dev->hmc_fpm_misc.max_ceqs))
 		return IRDMA_ERR_INVALID_CEQ_ID;
 	pble_obj_cnt = info->dev->hmc_info->hmc_obj[IRDMA_HMC_IW_PBLE].cnt;
 
@@ -4205,7 +4166,7 @@ enum irdma_status_code irdma_sc_ccq_init(struct irdma_sc_cq *cq,
 	    info->num_elem > info->dev->hw_attrs.uk_attrs.max_hw_cq_size)
 		return IRDMA_ERR_INVALID_SIZE;
 
-	if (info->ceq_id > (info->dev->hmc_fpm_misc.max_ceqs - 1))
+	if (info->ceq_id >= (info->dev->hmc_fpm_misc.max_ceqs ))
 		return IRDMA_ERR_INVALID_CEQ_ID;
 
 	pble_obj_cnt = info->dev->hmc_info->hmc_obj[IRDMA_HMC_IW_PBLE].cnt;

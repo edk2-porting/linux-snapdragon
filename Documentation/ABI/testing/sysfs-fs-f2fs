@@ -41,8 +41,7 @@ Description:	This parameter controls the number of prefree segments to be
 What:		/sys/fs/f2fs/<disk>/main_blkaddr
 Date:		November 2019
 Contact:	"Ramon Pantin" <pantin@google.com>
-Description:
-		 Shows first block address of MAIN area.
+Description:	Shows first block address of MAIN area.
 
 What:		/sys/fs/f2fs/<disk>/ipu_policy
 Date:		November 2013
@@ -112,6 +111,11 @@ Date:		January 2019
 Contact:	"Jaegeuk Kim" <jaegeuk@kernel.org>
 Description:	Set timeout to issue discard commands during umount.
 	        Default: 5 secs
+
+What:		/sys/fs/f2fs/<disk>/pending_discard
+Date:		November 2021
+Contact:	"Jaegeuk Kim" <jaegeuk@kernel.org>
+Description:	Shows the number of pending discard commands in the queue.
 
 What:		/sys/fs/f2fs/<disk>/max_victim_search
 Date:		January 2014
@@ -426,6 +430,7 @@ Description:	Show status of f2fs superblock in real time.
 		0x800  SBI_QUOTA_SKIP_FLUSH  skip flushing quota in current CP
 		0x1000 SBI_QUOTA_NEED_REPAIR quota file may be corrupted
 		0x2000 SBI_IS_RESIZEFS       resizefs is in process
+		0x4000 SBI_IS_FREEZING       freefs is in process
 		====== ===================== =================================
 
 What:		/sys/fs/f2fs/<disk>/ckpt_thread_ioprio
@@ -493,3 +498,46 @@ Contact:	"Chao Yu" <yuchao0@huawei.com>
 Description:	When ATGC is on, it controls age threshold to bypass GCing young
 		candidates whose age is not beyond the threshold, by default it was
 		initialized as 604800 seconds (equals to 7 days).
+
+What:		/sys/fs/f2fs/<disk>/gc_reclaimed_segments
+Date:		July 2021
+Contact:	"Daeho Jeong" <daehojeong@google.com>
+Description:	Show how many segments have been reclaimed by GC during a specific
+		GC mode (0: GC normal, 1: GC idle CB, 2: GC idle greedy,
+		3: GC idle AT, 4: GC urgent high, 5: GC urgent low)
+		You can re-initialize this value to "0".
+
+What:		/sys/fs/f2fs/<disk>/gc_segment_mode
+Date:		July 2021
+Contact:	"Daeho Jeong" <daehojeong@google.com>
+Description:	You can control for which gc mode the "gc_reclaimed_segments" node shows.
+		Refer to the description of the modes in "gc_reclaimed_segments".
+
+What:		/sys/fs/f2fs/<disk>/seq_file_ra_mul
+Date:		July 2021
+Contact:	"Daeho Jeong" <daehojeong@google.com>
+Description:	You can	control the multiplier value of	bdi device readahead window size
+		between 2 (default) and 256 for POSIX_FADV_SEQUENTIAL advise option.
+
+What:		/sys/fs/f2fs/<disk>/max_fragment_chunk
+Date:		August 2021
+Contact:	"Daeho Jeong" <daehojeong@google.com>
+Description:	With "mode=fragment:block" mount options, we can scatter block allocation.
+		f2fs will allocate 1..<max_fragment_chunk> blocks in a chunk and make a hole
+		in the length of 1..<max_fragment_hole> by turns. This value can be set
+		between 1..512 and the default value is 4.
+
+What:		/sys/fs/f2fs/<disk>/max_fragment_hole
+Date:		August 2021
+Contact:	"Daeho Jeong" <daehojeong@google.com>
+Description:	With "mode=fragment:block" mount options, we can scatter block allocation.
+		f2fs will allocate 1..<max_fragment_chunk> blocks in a chunk and make a hole
+		in the length of 1..<max_fragment_hole> by turns. This value can be set
+		between 1..512 and the default value is 4.
+
+What:		/sys/fs/f2fs/<disk>/gc_urgent_high_remaining
+Date:		December 2021
+Contact:	"Daeho Jeong" <daehojeong@google.com>
+Description:	You can set the trial count limit for GC urgent high mode with this value.
+		If GC thread gets to the limit, the mode will turn back to GC normal mode.
+		By default, the value is zero, which means there is no limit like before.

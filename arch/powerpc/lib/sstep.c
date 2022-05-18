@@ -112,9 +112,9 @@ static nokprobe_inline long address_ok(struct pt_regs *regs,
 {
 	if (!user_mode(regs))
 		return 1;
-	if (__access_ok(ea, nb))
+	if (access_ok((void __user *)ea, nb))
 		return 1;
-	if (__access_ok(ea, 1))
+	if (access_ok((void __user *)ea, 1))
 		/* Access overlaps the end of the user region */
 		regs->dar = TASK_SIZE_MAX - 1;
 	else
@@ -302,33 +302,51 @@ static nokprobe_inline void do_byte_reverse(void *ptr, int nb)
 	}
 }
 
-static nokprobe_inline int read_mem_aligned(unsigned long *dest,
-					    unsigned long ea, int nb,
-					    struct pt_regs *regs)
+static __always_inline int
+__read_mem_aligned(unsigned long *dest, unsigned long ea, int nb, struct pt_regs *regs)
 {
-	int err = 0;
 	unsigned long x = 0;
 
 	switch (nb) {
 	case 1:
-		err = __get_user(x, (unsigned char __user *) ea);
+		unsafe_get_user(x, (unsigned char __user *)ea, Efault);
 		break;
 	case 2:
-		err = __get_user(x, (unsigned short __user *) ea);
+		unsafe_get_user(x, (unsigned short __user *)ea, Efault);
 		break;
 	case 4:
-		err = __get_user(x, (unsigned int __user *) ea);
+		unsafe_get_user(x, (unsigned int __user *)ea, Efault);
 		break;
 #ifdef __powerpc64__
 	case 8:
-		err = __get_user(x, (unsigned long __user *) ea);
+		unsafe_get_user(x, (unsigned long __user *)ea, Efault);
 		break;
 #endif
 	}
-	if (!err)
-		*dest = x;
-	else
+	*dest = x;
+	return 0;
+
+Efault:
+	regs->dar = ea;
+	return -EFAULT;
+}
+
+static nokprobe_inline int
+read_mem_aligned(unsigned long *dest, unsigned long ea, int nb, struct pt_regs *regs)
+{
+	int err;
+
+	if (is_kernel_addr(ea))
+		return __read_mem_aligned(dest, ea, nb, regs);
+
+	if (user_read_access_begin((void __user *)ea, nb)) {
+		err = __read_mem_aligned(dest, ea, nb, regs);
+		user_read_access_end();
+	} else {
+		err = -EFAULT;
 		regs->dar = ea;
+	}
+
 	return err;
 }
 
@@ -336,10 +354,8 @@ static nokprobe_inline int read_mem_aligned(unsigned long *dest,
  * Copy from userspace to a buffer, using the largest possible
  * aligned accesses, up to sizeof(long).
  */
-static nokprobe_inline int copy_mem_in(u8 *dest, unsigned long ea, int nb,
-				       struct pt_regs *regs)
+static __always_inline int __copy_mem_in(u8 *dest, unsigned long ea, int nb, struct pt_regs *regs)
 {
-	int err = 0;
 	int c;
 
 	for (; nb > 0; nb -= c) {
@@ -348,31 +364,46 @@ static nokprobe_inline int copy_mem_in(u8 *dest, unsigned long ea, int nb,
 			c = max_align(nb);
 		switch (c) {
 		case 1:
-			err = __get_user(*dest, (unsigned char __user *) ea);
+			unsafe_get_user(*dest, (u8 __user *)ea, Efault);
 			break;
 		case 2:
-			err = __get_user(*(u16 *)dest,
-					 (unsigned short __user *) ea);
+			unsafe_get_user(*(u16 *)dest, (u16 __user *)ea, Efault);
 			break;
 		case 4:
-			err = __get_user(*(u32 *)dest,
-					 (unsigned int __user *) ea);
+			unsafe_get_user(*(u32 *)dest, (u32 __user *)ea, Efault);
 			break;
 #ifdef __powerpc64__
 		case 8:
-			err = __get_user(*(unsigned long *)dest,
-					 (unsigned long __user *) ea);
+			unsafe_get_user(*(u64 *)dest, (u64 __user *)ea, Efault);
 			break;
 #endif
-		}
-		if (err) {
-			regs->dar = ea;
-			return err;
 		}
 		dest += c;
 		ea += c;
 	}
 	return 0;
+
+Efault:
+	regs->dar = ea;
+	return -EFAULT;
+}
+
+static nokprobe_inline int copy_mem_in(u8 *dest, unsigned long ea, int nb, struct pt_regs *regs)
+{
+	int err;
+
+	if (is_kernel_addr(ea))
+		return __copy_mem_in(dest, ea, nb, regs);
+
+	if (user_read_access_begin((void __user *)ea, nb)) {
+		err = __copy_mem_in(dest, ea, nb, regs);
+		user_read_access_end();
+	} else {
+		err = -EFAULT;
+		regs->dar = ea;
+	}
+
+	return err;
 }
 
 static nokprobe_inline int read_mem_unaligned(unsigned long *dest,
@@ -410,30 +441,48 @@ static int read_mem(unsigned long *dest, unsigned long ea, int nb,
 }
 NOKPROBE_SYMBOL(read_mem);
 
-static nokprobe_inline int write_mem_aligned(unsigned long val,
-					     unsigned long ea, int nb,
-					     struct pt_regs *regs)
+static __always_inline int
+__write_mem_aligned(unsigned long val, unsigned long ea, int nb, struct pt_regs *regs)
 {
-	int err = 0;
-
 	switch (nb) {
 	case 1:
-		err = __put_user(val, (unsigned char __user *) ea);
+		unsafe_put_user(val, (unsigned char __user *)ea, Efault);
 		break;
 	case 2:
-		err = __put_user(val, (unsigned short __user *) ea);
+		unsafe_put_user(val, (unsigned short __user *)ea, Efault);
 		break;
 	case 4:
-		err = __put_user(val, (unsigned int __user *) ea);
+		unsafe_put_user(val, (unsigned int __user *)ea, Efault);
 		break;
 #ifdef __powerpc64__
 	case 8:
-		err = __put_user(val, (unsigned long __user *) ea);
+		unsafe_put_user(val, (unsigned long __user *)ea, Efault);
 		break;
 #endif
 	}
-	if (err)
+	return 0;
+
+Efault:
+	regs->dar = ea;
+	return -EFAULT;
+}
+
+static nokprobe_inline int
+write_mem_aligned(unsigned long val, unsigned long ea, int nb, struct pt_regs *regs)
+{
+	int err;
+
+	if (is_kernel_addr(ea))
+		return __write_mem_aligned(val, ea, nb, regs);
+
+	if (user_write_access_begin((void __user *)ea, nb)) {
+		err = __write_mem_aligned(val, ea, nb, regs);
+		user_write_access_end();
+	} else {
+		err = -EFAULT;
 		regs->dar = ea;
+	}
+
 	return err;
 }
 
@@ -441,10 +490,8 @@ static nokprobe_inline int write_mem_aligned(unsigned long val,
  * Copy from a buffer to userspace, using the largest possible
  * aligned accesses, up to sizeof(long).
  */
-static nokprobe_inline int copy_mem_out(u8 *dest, unsigned long ea, int nb,
-					struct pt_regs *regs)
+static nokprobe_inline int __copy_mem_out(u8 *dest, unsigned long ea, int nb, struct pt_regs *regs)
 {
-	int err = 0;
 	int c;
 
 	for (; nb > 0; nb -= c) {
@@ -453,31 +500,46 @@ static nokprobe_inline int copy_mem_out(u8 *dest, unsigned long ea, int nb,
 			c = max_align(nb);
 		switch (c) {
 		case 1:
-			err = __put_user(*dest, (unsigned char __user *) ea);
+			unsafe_put_user(*dest, (u8 __user *)ea, Efault);
 			break;
 		case 2:
-			err = __put_user(*(u16 *)dest,
-					 (unsigned short __user *) ea);
+			unsafe_put_user(*(u16 *)dest, (u16 __user *)ea, Efault);
 			break;
 		case 4:
-			err = __put_user(*(u32 *)dest,
-					 (unsigned int __user *) ea);
+			unsafe_put_user(*(u32 *)dest, (u32 __user *)ea, Efault);
 			break;
 #ifdef __powerpc64__
 		case 8:
-			err = __put_user(*(unsigned long *)dest,
-					 (unsigned long __user *) ea);
+			unsafe_put_user(*(u64 *)dest, (u64 __user *)ea, Efault);
 			break;
 #endif
-		}
-		if (err) {
-			regs->dar = ea;
-			return err;
 		}
 		dest += c;
 		ea += c;
 	}
 	return 0;
+
+Efault:
+	regs->dar = ea;
+	return -EFAULT;
+}
+
+static nokprobe_inline int copy_mem_out(u8 *dest, unsigned long ea, int nb, struct pt_regs *regs)
+{
+	int err;
+
+	if (is_kernel_addr(ea))
+		return __copy_mem_out(dest, ea, nb, regs);
+
+	if (user_write_access_begin((void __user *)ea, nb)) {
+		err = __copy_mem_out(dest, ea, nb, regs);
+		user_write_access_end();
+	} else {
+		err = -EFAULT;
+		regs->dar = ea;
+	}
+
+	return err;
 }
 
 static nokprobe_inline int write_mem_unaligned(unsigned long val,
@@ -986,10 +1048,24 @@ static nokprobe_inline int do_vsx_store(struct instruction_op *op,
 }
 #endif /* CONFIG_VSX */
 
+static int __emulate_dcbz(unsigned long ea)
+{
+	unsigned long i;
+	unsigned long size = l1_dcache_bytes();
+
+	for (i = 0; i < size; i += sizeof(long))
+		unsafe_put_user(0, (unsigned long __user *)(ea + i), Efault);
+
+	return 0;
+
+Efault:
+	return -EFAULT;
+}
+
 int emulate_dcbz(unsigned long ea, struct pt_regs *regs)
 {
 	int err;
-	unsigned long i, size;
+	unsigned long size;
 
 #ifdef __powerpc64__
 	size = ppc64_caches.l1d.block_size;
@@ -1001,20 +1077,30 @@ int emulate_dcbz(unsigned long ea, struct pt_regs *regs)
 	ea &= ~(size - 1);
 	if (!address_ok(regs, ea, size))
 		return -EFAULT;
-	for (i = 0; i < size; i += sizeof(long)) {
-		err = __put_user(0, (unsigned long __user *) (ea + i));
-		if (err) {
-			regs->dar = ea;
-			return err;
-		}
+
+	if (is_kernel_addr(ea)) {
+		err = __emulate_dcbz(ea);
+	} else if (user_write_access_begin((void __user *)ea, size)) {
+		err = __emulate_dcbz(ea);
+		user_write_access_end();
+	} else {
+		err = -EFAULT;
 	}
-	return 0;
+
+	if (err)
+		regs->dar = ea;
+
+
+	return err;
 }
 NOKPROBE_SYMBOL(emulate_dcbz);
 
 #define __put_user_asmx(x, addr, err, op, cr)		\
 	__asm__ __volatile__(				\
+		".machine push\n"			\
+		".machine power8\n"			\
 		"1:	" op " %2,0,%3\n"		\
+		".machine pop\n"			\
 		"	mfcr	%1\n"			\
 		"2:\n"					\
 		".section .fixup,\"ax\"\n"		\
@@ -1027,7 +1113,10 @@ NOKPROBE_SYMBOL(emulate_dcbz);
 
 #define __get_user_asmx(x, addr, err, op)		\
 	__asm__ __volatile__(				\
+		".machine push\n"			\
+		".machine power8\n"			\
 		"1:	"op" %1,0,%2\n"			\
+		".machine pop\n"			\
 		"2:\n"					\
 		".section .fixup,\"ax\"\n"		\
 		"3:	li	%0,%3\n"		\
@@ -1271,7 +1360,7 @@ static nokprobe_inline int trap_compare(long v1, long v2)
  * otherwise.
  */
 int analyse_instr(struct instruction_op *op, const struct pt_regs *regs,
-		  struct ppc_inst instr)
+		  ppc_inst_t instr)
 {
 #ifdef CONFIG_PPC64
 	unsigned int suffixopcode, prefixtype, prefix_r;
@@ -3181,12 +3270,14 @@ void emulate_update_regs(struct pt_regs *regs, struct instruction_op *op)
 		case BARRIER_EIEIO:
 			eieio();
 			break;
+#ifdef CONFIG_PPC64
 		case BARRIER_LWSYNC:
 			asm volatile("lwsync" : : : "memory");
 			break;
 		case BARRIER_PTESYNC:
 			asm volatile("ptesync" : : : "memory");
 			break;
+#endif
 		}
 		break;
 
@@ -3304,7 +3395,7 @@ int emulate_loadstore(struct pt_regs *regs, struct instruction_op *op)
 			__put_user_asmx(op->val, ea, err, "stbcx.", cr);
 			break;
 		case 2:
-			__put_user_asmx(op->val, ea, err, "stbcx.", cr);
+			__put_user_asmx(op->val, ea, err, "sthcx.", cr);
 			break;
 #endif
 		case 4:
@@ -3495,7 +3586,7 @@ NOKPROBE_SYMBOL(emulate_loadstore);
  * or -1 if the instruction is one that should not be stepped,
  * such as an rfid, or a mtmsrd that would clear MSR_RI.
  */
-int emulate_step(struct pt_regs *regs, struct ppc_inst instr)
+int emulate_step(struct pt_regs *regs, ppc_inst_t instr)
 {
 	struct instruction_op op;
 	int r, err, type;

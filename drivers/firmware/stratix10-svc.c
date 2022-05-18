@@ -477,7 +477,7 @@ static int svc_normal_to_secure_thread(void *data)
 		case INTEL_SIP_SMC_RSU_ERROR:
 			pr_err("%s: STATUS_ERROR\n", __func__);
 			cbdata->status = BIT(SVC_STATUS_ERROR);
-			cbdata->kaddr1 = NULL;
+			cbdata->kaddr1 = &res.a1;
 			cbdata->kaddr2 = NULL;
 			cbdata->kaddr3 = NULL;
 			pdata->chan->scl->receive_cb(pdata->chan->scl, cbdata);
@@ -520,7 +520,7 @@ static int svc_normal_to_secure_thread(void *data)
  * physical address of memory block reserved by secure monitor software at
  * secure world.
  *
- * svc_normal_to_secure_shm_thread() calls do_exit() directly since it is a
+ * svc_normal_to_secure_shm_thread() terminates directly since it is a
  * standlone thread for which no one will call kthread_stop() or return when
  * 'kthread_should_stop()' is true.
  */
@@ -544,7 +544,7 @@ static int svc_normal_to_secure_shm_thread(void *data)
 	}
 
 	complete(&sh_mem->sync_complete);
-	do_exit(0);
+	return 0;
 }
 
 /**

@@ -388,7 +388,6 @@ static void _kvm_vz_restore_htimer(struct kvm_vcpu *vcpu,
 				   u32 compare, u32 cause)
 {
 	u32 start_count, after_count;
-	ktime_t freeze_time;
 	unsigned long flags;
 
 	/*
@@ -396,7 +395,7 @@ static void _kvm_vz_restore_htimer(struct kvm_vcpu *vcpu,
 	 * this with interrupts disabled to avoid latency.
 	 */
 	local_irq_save(flags);
-	freeze_time = kvm_mips_freeze_hrtimer(vcpu, &start_count);
+	kvm_mips_freeze_hrtimer(vcpu, &start_count);
 	write_c0_gtoffset(start_count - read_c0_count());
 	local_irq_restore(flags);
 
@@ -459,8 +458,8 @@ void kvm_vz_acquire_htimer(struct kvm_vcpu *vcpu)
 /**
  * _kvm_vz_save_htimer() - Switch to software emulation of guest timer.
  * @vcpu:	Virtual CPU.
- * @compare:	Pointer to write compare value to.
- * @cause:	Pointer to write cause value to.
+ * @out_compare: Pointer to write compare value to.
+ * @out_cause:	Pointer to write cause value to.
  *
  * Save VZ guest timer state and switch to software emulation of guest CP0
  * timer. The hard timer must already be in use, so preemption should be
@@ -1542,11 +1541,14 @@ static int kvm_trap_vz_handle_guest_exit(struct kvm_vcpu *vcpu)
 }
 
 /**
- * kvm_trap_vz_handle_cop_unusuable() - Guest used unusable coprocessor.
+ * kvm_trap_vz_handle_cop_unusable() - Guest used unusable coprocessor.
  * @vcpu:	Virtual CPU context.
  *
  * Handle when the guest attempts to use a coprocessor which hasn't been allowed
  * by the root context.
+ *
+ * Return: value indicating whether to resume the host or the guest
+ * 	   (RESUME_HOST or RESUME_GUEST)
  */
 static int kvm_trap_vz_handle_cop_unusable(struct kvm_vcpu *vcpu)
 {
@@ -1593,6 +1595,9 @@ static int kvm_trap_vz_handle_cop_unusable(struct kvm_vcpu *vcpu)
  *
  * Handle when the guest attempts to use MSA when it is disabled in the root
  * context.
+ *
+ * Return: value indicating whether to resume the host or the guest
+ * 	   (RESUME_HOST or RESUME_GUEST)
  */
 static int kvm_trap_vz_handle_msa_disabled(struct kvm_vcpu *vcpu)
 {

@@ -51,6 +51,7 @@
 /**
  * struct bcm_device_data - device specific data
  * @no_early_set_baudrate: Disallow set baudrate before driver setup()
+ * @drive_rts_on_open: drive RTS signal on ->open() when platform requires it
  */
 struct bcm_device_data {
 	bool	no_early_set_baudrate;
@@ -77,6 +78,8 @@ struct bcm_device_data {
  * @btlp: Apple ACPI method to toggle BT_WAKE pin ("Bluetooth Low Power")
  * @btpu: Apple ACPI method to drive BT_REG_ON pin high ("Bluetooth Power Up")
  * @btpd: Apple ACPI method to drive BT_REG_ON pin low ("Bluetooth Power Down")
+ * @gpio_count: internal counter for GPIO resources associated with ACPI device
+ * @gpio_int_idx: index in _CRS for GpioInt() resource
  * @txco_clk: external reference frequency clock used by Bluetooth device
  * @lpo_clk: external LPO clock used by Bluetooth device
  * @supplies: VBAT and VDDIO supplies used by Bluetooth device
@@ -88,10 +91,13 @@ struct bcm_device_data {
  *	set to 0 if @init_speed is already the preferred baudrate
  * @irq: interrupt triggered by HOST_WAKE_BT pin
  * @irq_active_low: whether @irq is active low
+ * @irq_acquired: flag to show if IRQ handler has been assigned
  * @hu: pointer to HCI UART controller struct,
  *	used to disable flow control during runtime suspend and system sleep
  * @is_suspended: whether flow control is currently disabled
  * @no_early_set_baudrate: don't set_baudrate before setup()
+ * @drive_rts_on_open: drive RTS signal on ->open() when platform requires it
+ * @pcm_int_params: keep the initial PCM configuration
  */
 struct bcm_device {
 	/* Must be the first member, hci_serdev.c expects this. */
@@ -1182,7 +1188,12 @@ static int bcm_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	dev->dev = &pdev->dev;
-	dev->irq = platform_get_irq(pdev, 0);
+
+	ret = platform_get_irq(pdev, 0);
+	if (ret < 0)
+		return ret;
+
+	dev->irq = ret;
 
 	/* Initialize routing field to an unused value */
 	dev->pcm_int_params[0] = 0xff;
@@ -1502,7 +1513,6 @@ static const struct of_device_id bcm_bluetooth_of_match[] = {
 	{ .compatible = "brcm,bcm4330-bt" },
 	{ .compatible = "brcm,bcm4334-bt" },
 	{ .compatible = "brcm,bcm4345c5" },
-	{ .compatible = "brcm,bcm4330-bt" },
 	{ .compatible = "brcm,bcm43438-bt", .data = &bcm43438_device_data },
 	{ .compatible = "brcm,bcm43540-bt", .data = &bcm4354_device_data },
 	{ .compatible = "brcm,bcm4335a0" },

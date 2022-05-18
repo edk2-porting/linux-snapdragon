@@ -36,6 +36,7 @@
 #include "../debug.h"
 #include "../dso.h"
 #include "../callchain.h"
+#include "../env.h"
 #include "../evsel.h"
 #include "../event.h"
 #include "../thread.h"
@@ -687,7 +688,7 @@ static void set_sample_datasrc_in_dict(PyObject *dict,
 			_PyUnicode_FromString(decode));
 }
 
-static void regs_map(struct regs_dump *regs, uint64_t mask, char *bf, int size)
+static void regs_map(struct regs_dump *regs, uint64_t mask, const char *arch, char *bf, int size)
 {
 	unsigned int i = 0, r;
 	int printed = 0;
@@ -702,7 +703,7 @@ static void regs_map(struct regs_dump *regs, uint64_t mask, char *bf, int size)
 
 		printed += scnprintf(bf + printed, size - printed,
 				     "%5s:0x%" PRIx64 " ",
-				     perf_reg_name(r), val);
+				     perf_reg_name(r, arch), val);
 	}
 }
 
@@ -711,6 +712,7 @@ static void set_regs_in_dict(PyObject *dict,
 			     struct evsel *evsel)
 {
 	struct perf_event_attr *attr = &evsel->core.attr;
+	const char *arch = perf_env__arch(evsel__env(evsel));
 
 	/*
 	 * Here value 28 is a constant size which can be used to print
@@ -722,12 +724,12 @@ static void set_regs_in_dict(PyObject *dict,
 	int size = __sw_hweight64(attr->sample_regs_intr) * 28;
 	char bf[size];
 
-	regs_map(&sample->intr_regs, attr->sample_regs_intr, bf, sizeof(bf));
+	regs_map(&sample->intr_regs, attr->sample_regs_intr, arch, bf, sizeof(bf));
 
 	pydict_set_item_string_decref(dict, "iregs",
 			_PyUnicode_FromString(bf));
 
-	regs_map(&sample->user_regs, attr->sample_regs_user, bf, sizeof(bf));
+	regs_map(&sample->user_regs, attr->sample_regs_user, arch, bf, sizeof(bf));
 
 	pydict_set_item_string_decref(dict, "uregs",
 			_PyUnicode_FromString(bf));
@@ -942,6 +944,8 @@ static void python_process_tracepoint(struct perf_sample *sample,
 				offset  = val;
 				len     = offset >> 16;
 				offset &= 0xffff;
+				if (field->flags & TEP_FIELD_IS_RELATIVE)
+					offset += field->offset + field->size;
 			}
 			if (field->flags & TEP_FIELD_IS_STRING &&
 			    is_printable_array(data + offset, len)) {
@@ -1422,6 +1426,37 @@ static void python_process_event(union perf_event *event,
 	}
 }
 
+static void python_process_throttle(union perf_event *event,
+				    struct perf_sample *sample,
+				    struct machine *machine)
+{
+	const char *handler_name;
+	PyObject *handler, *t;
+
+	if (event->header.type == PERF_RECORD_THROTTLE)
+		handler_name = "throttle";
+	else
+		handler_name = "unthrottle";
+	handler = get_handler(handler_name);
+	if (!handler)
+		return;
+
+	t = tuple_new(6);
+	if (!t)
+		return;
+
+	tuple_set_u64(t, 0, event->throttle.time);
+	tuple_set_u64(t, 1, event->throttle.id);
+	tuple_set_u64(t, 2, event->throttle.stream_id);
+	tuple_set_s32(t, 3, sample->cpu);
+	tuple_set_s32(t, 4, sample->pid);
+	tuple_set_s32(t, 5, sample->tid);
+
+	call_object(handler, t, handler_name);
+
+	Py_DECREF(t);
+}
+
 static void python_do_process_switch(union perf_event *event,
 				     struct perf_sample *sample,
 				     struct machine *machine)
@@ -1522,7 +1557,7 @@ static void get_handler_name(char *str, size_t size,
 }
 
 static void
-process_stat(struct evsel *counter, int cpu, int thread, u64 tstamp,
+process_stat(struct evsel *counter, struct perf_cpu cpu, int thread, u64 tstamp,
 	     struct perf_counts_values *count)
 {
 	PyObject *handler, *t;
@@ -1542,7 +1577,7 @@ process_stat(struct evsel *counter, int cpu, int thread, u64 tstamp,
 		return;
 	}
 
-	PyTuple_SetItem(t, n++, _PyLong_FromLong(cpu));
+	PyTuple_SetItem(t, n++, _PyLong_FromLong(cpu.cpu));
 	PyTuple_SetItem(t, n++, _PyLong_FromLong(thread));
 
 	tuple_set_u64(t, n++, tstamp);
@@ -1566,14 +1601,14 @@ static void python_process_stat(struct perf_stat_config *config,
 	int cpu, thread;
 
 	if (config->aggr_mode == AGGR_GLOBAL) {
-		process_stat(counter, -1, -1, tstamp,
+		process_stat(counter, (struct perf_cpu){ .cpu = -1 }, -1, tstamp,
 			     &counter->counts->aggr);
 		return;
 	}
 
 	for (thread = 0; thread < threads->nr; thread++) {
-		for (cpu = 0; cpu < cpus->nr; cpu++) {
-			process_stat(counter, cpus->map[cpu],
+		for (cpu = 0; cpu < perf_cpu_map__nr(cpus); cpu++) {
+			process_stat(counter, perf_cpu_map__cpu(cpus, cpu),
 				     perf_thread_map__pid(threads, thread), tstamp,
 				     perf_counts(counter->counts, cpu, thread));
 		}
@@ -2079,5 +2114,6 @@ struct scripting_ops python_scripting_ops = {
 	.process_auxtrace_error	= python_process_auxtrace_error,
 	.process_stat		= python_process_stat,
 	.process_stat_interval	= python_process_stat_interval,
+	.process_throttle	= python_process_throttle,
 	.generate_script	= python_generate_script,
 };

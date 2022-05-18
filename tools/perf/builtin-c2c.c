@@ -139,11 +139,11 @@ static void *c2c_he_zalloc(size_t size)
 	if (!c2c_he)
 		return NULL;
 
-	c2c_he->cpuset = bitmap_alloc(c2c.cpus_cnt);
+	c2c_he->cpuset = bitmap_zalloc(c2c.cpus_cnt);
 	if (!c2c_he->cpuset)
 		return NULL;
 
-	c2c_he->nodeset = bitmap_alloc(c2c.nodes_cnt);
+	c2c_he->nodeset = bitmap_zalloc(c2c.nodes_cnt);
 	if (!c2c_he->nodeset)
 		return NULL;
 
@@ -2015,7 +2015,8 @@ static int setup_nodes(struct perf_session *session)
 {
 	struct numa_node *n;
 	unsigned long **nodes;
-	int node, cpu;
+	int node, idx;
+	struct perf_cpu cpu;
 	int *cpu2node;
 
 	if (c2c.node_info > 2)
@@ -2038,8 +2039,8 @@ static int setup_nodes(struct perf_session *session)
 	if (!cpu2node)
 		return -ENOMEM;
 
-	for (cpu = 0; cpu < c2c.cpus_cnt; cpu++)
-		cpu2node[cpu] = -1;
+	for (idx = 0; idx < c2c.cpus_cnt; idx++)
+		cpu2node[idx] = -1;
 
 	c2c.cpu2node = cpu2node;
 
@@ -2047,7 +2048,7 @@ static int setup_nodes(struct perf_session *session)
 		struct perf_cpu_map *map = n[node].map;
 		unsigned long *set;
 
-		set = bitmap_alloc(c2c.cpus_cnt);
+		set = bitmap_zalloc(c2c.cpus_cnt);
 		if (!set)
 			return -ENOMEM;
 
@@ -2057,13 +2058,13 @@ static int setup_nodes(struct perf_session *session)
 		if (perf_cpu_map__empty(map))
 			continue;
 
-		for (cpu = 0; cpu < map->nr; cpu++) {
-			set_bit(map->map[cpu], set);
+		perf_cpu_map__for_each_cpu(cpu, idx, map) {
+			set_bit(cpu.cpu, set);
 
-			if (WARN_ONCE(cpu2node[map->map[cpu]] != -1, "node/cpu topology bug"))
+			if (WARN_ONCE(cpu2node[cpu.cpu] != -1, "node/cpu topology bug"))
 				return -EINVAL;
 
-			cpu2node[map->map[cpu]] = node;
+			cpu2node[cpu.cpu] = node;
 		}
 	}
 
@@ -2768,6 +2769,10 @@ static int perf_c2c__report(int argc, const char **argv)
 	if (c2c.stats_only)
 		c2c.use_stdio = true;
 
+	err = symbol__validate_sym_arguments();
+	if (err)
+		goto out;
+
 	if (!input_name || !strlen(input_name))
 		input_name = "perf.data";
 
@@ -2790,7 +2795,7 @@ static int perf_c2c__report(int argc, const char **argv)
 		goto out;
 	}
 
-	session = perf_session__new(&data, 0, &c2c.tool);
+	session = perf_session__new(&data, &c2c.tool);
 	if (IS_ERR(session)) {
 		err = PTR_ERR(session);
 		pr_debug("Error creating perf session\n");
