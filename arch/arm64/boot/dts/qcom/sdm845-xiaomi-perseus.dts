@@ -86,6 +86,11 @@
 	firmware-name = "qcom/sdm845/xiaomi/cdsp.mbn";
 };
 
+&venus {
+	status = "okay";
+	firmware-name = "qcom/sdm845/xiaomi/venus.mbn";
+};
+
 &dsi0 {
 	status = "okay";
 	vdda-supply = <&vdda_mipi_dsi0_1p2>;
