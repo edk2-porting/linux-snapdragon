@@ -8,6 +8,8 @@
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/swab.h>
+#include <linux/backlight.h>
 
 #include <video/mipi_display.h>
 
@@ -90,13 +92,6 @@ static int samsung_fhd_ea8076_on(struct samsung_fhd_ea8076 *ctx)
 	dsi_dcs_write_seq(dsi, 0xd8, 0x00);
 	dsi_dcs_write_seq(dsi, 0xf0, 0xa5, 0xa5);
 	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x20);
-
-	ret = mipi_dsi_dcs_set_display_brightness(dsi, 0x0000);
-	if (ret < 0) {
-		dev_err(dev, "Failed to set display brightness: %d\n", ret);
-		return ret;
-	}
-
 	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x00);
 	msleep(67);
 
@@ -218,6 +213,41 @@ static const struct drm_panel_funcs samsung_fhd_ea8076_panel_funcs = {
 	.get_modes = samsung_fhd_ea8076_get_modes,
 };
 
+static int samsung_fhd_ea8076_panel_bl_update_status(struct backlight_device *bl)
+{
+	struct mipi_dsi_device *dsi = bl_get_data(bl);
+	int err;
+	u16 brightness;
+
+	brightness = (u16)backlight_get_brightness(bl);
+	// This panel needs the high and low bytes swapped for the brightness value
+	brightness = __swab16(brightness);
+
+	err = mipi_dsi_dcs_set_display_brightness(dsi, brightness);
+	if (err < 0)
+		return err;
+
+	return 0;
+}
+
+static const struct backlight_ops samsung_fhd_ea8076_panel_bl_ops = {
+	.update_status = samsung_fhd_ea8076_panel_bl_update_status,
+};
+
+static struct backlight_device *
+samsung_fhd_ea8076_create_backlight(struct mipi_dsi_device *dsi)
+{
+	struct device *dev = &dsi->dev;
+	const struct backlight_properties props = {
+		.type = BACKLIGHT_PLATFORM,
+		.brightness = 2047,
+		.max_brightness = 2047,
+	};
+
+	return devm_backlight_device_register(dev, dev_name(dev), dev, dsi,
+					      &samsung_fhd_ea8076_panel_bl_ops, &props);
+}
+
 static int samsung_fhd_ea8076_probe(struct mipi_dsi_device *dsi)
 {
 	struct device *dev = &dsi->dev;
@@ -243,6 +273,11 @@ static int samsung_fhd_ea8076_probe(struct mipi_dsi_device *dsi)
 
 	drm_panel_init(&ctx->panel, dev, &samsung_fhd_ea8076_panel_funcs,
 		       DRM_MODE_CONNECTOR_DSI);
+
+	ctx->panel.backlight = samsung_fhd_ea8076_create_backlight(dsi);
+	if (IS_ERR(ctx->panel.backlight))
+		return dev_err_probe(dev, PTR_ERR(ctx->panel.backlight),
+				     "Failed to create backlight\n");
 
 	drm_panel_add(&ctx->panel);
 
