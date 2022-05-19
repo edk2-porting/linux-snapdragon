@@ -98,7 +98,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <0>;
-		vddi0-supply = <&vreg_l14a_1p8>;
+		vddio-supply = <&vreg_l14a_1p8>;
 		reset-gpios = <&tlmm 6 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&sde_dsi_active &sde_te_active>;
@@ -121,10 +121,15 @@
 };
 
 &gpu {
+	status = "okay";
 	zap-shader {
 		memory-region = <&gpu_mem>;
 		firmware-name = "qcom/sdm845/xiaomi/a630_zap.mbn";
 	};
+};
+
+&gmu {
+	status = "okay";
 };
 
 &ipa {
