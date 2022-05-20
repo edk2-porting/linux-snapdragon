@@ -90,7 +90,6 @@ static int tas2557_codec_suspend(struct snd_soc_component *pCodec)
 
 	mutex_lock(&pTAS2557->codec_lock);
 
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 	pTAS2557->runtime_suspend(pTAS2557);
 
 	mutex_unlock(&pTAS2557->codec_lock);
@@ -104,7 +103,6 @@ static int tas2557_codec_resume(struct snd_soc_component *pCodec)
 
 	mutex_lock(&pTAS2557->codec_lock);
 
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 	pTAS2557->runtime_resume(pTAS2557);
 
 	mutex_unlock(&pTAS2557->codec_lock);
@@ -138,20 +136,13 @@ static const struct snd_soc_dapm_route tas2557_audio_map[] = {
 static int tas2557_startup(struct snd_pcm_substream *substream,
 	struct snd_soc_dai *dai)
 {
-	struct snd_soc_component *codec = dai->component;
-	struct tas2557_priv *pTAS2557 = snd_soc_component_get_drvdata(codec);
-
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 	return 0;
 }
 
 static void tas2557_shutdown(struct snd_pcm_substream *substream,
 	struct snd_soc_dai *dai)
 {
-	struct snd_soc_component *codec = dai->component;
-	struct tas2557_priv *pTAS2557 = snd_soc_component_get_drvdata(codec);
 
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 }
 
 static int tas2557_mute(struct snd_soc_dai *dai, int mute, int direction)
@@ -161,7 +152,6 @@ static int tas2557_mute(struct snd_soc_dai *dai, int mute, int direction)
 
 	mutex_lock(&pTAS2557->codec_lock);
 
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 	tas2557_enable(pTAS2557, !mute);
 
 	mutex_unlock(&pTAS2557->codec_lock);
@@ -171,11 +161,6 @@ static int tas2557_mute(struct snd_soc_dai *dai, int mute, int direction)
 static int tas2557_set_dai_sysclk(struct snd_soc_dai *pDAI,
 	int nClkID, unsigned int nFreqency, int nDir)
 {
-	struct snd_soc_component *pCodec = pDAI->component;
-	struct tas2557_priv *pTAS2557 = snd_soc_component_get_drvdata(pCodec);
-
-	dev_dbg(pTAS2557->dev, "tas2557_set_dai_sysclk: freq = %u\n", nFreqency);
-
 	return 0;
 }
 
@@ -187,7 +172,6 @@ static int tas2557_hw_params(struct snd_pcm_substream *pSubstream,
 
 	mutex_lock(&pTAS2557->codec_lock);
 
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 /* do bit rate setting during platform data */
 /* tas2557_set_bit_rate(pTAS2557, channel_both, snd_pcm_format_width(params_format(pParams))); */
 	tas2557_set_sampling_rate(pTAS2557, params_rate(pParams));
@@ -198,37 +182,23 @@ static int tas2557_hw_params(struct snd_pcm_substream *pSubstream,
 
 static int tas2557_set_dai_fmt(struct snd_soc_dai *pDAI, unsigned int nFormat)
 {
-	struct snd_soc_component *codec = pDAI->component;
-	struct tas2557_priv *pTAS2557 = snd_soc_component_get_drvdata(codec);
-
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 	return 0;
 }
 
 static int tas2557_prepare(struct snd_pcm_substream *pSubstream,
 	struct snd_soc_dai *pDAI)
 {
-	struct snd_soc_component *codec = pDAI->component;
-	struct tas2557_priv *pTAS2557 = snd_soc_component_get_drvdata(codec);
-
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 	return 0;
 }
 
 static int tas2557_set_bias_level(struct snd_soc_component *pCodec,
 	enum snd_soc_bias_level eLevel)
 {
-	struct tas2557_priv *pTAS2557 = snd_soc_component_get_drvdata(pCodec);
-
-	dev_dbg(pTAS2557->dev, "%s: %d\n", __func__, eLevel);
 	return 0;
 }
 
 static int tas2557_codec_probe(struct snd_soc_component *pCodec)
 {
-	struct tas2557_priv *pTAS2557 = snd_soc_component_get_drvdata(pCodec);
-
-	dev_dbg(pTAS2557->dev, "%s\n", __func__);
 	return 0;
 }
 
@@ -249,8 +219,6 @@ static int tas2557_mute_ctrl_get(struct snd_kcontrol *pKcontrol,
 	mutex_lock(&pTAS2557->codec_lock);
 
 	pValue->value.integer.value[0] = pTAS2557->mbMute;
-	dev_dbg(pTAS2557->dev, "tas2557_mute_ctrl_get = %d\n",
-		pTAS2557->mbMute);
 
 	mutex_unlock(&pTAS2557->codec_lock);
 	return 0;
@@ -269,8 +237,6 @@ static int tas2557_mute_ctrl_put(struct snd_kcontrol *pKcontrol,
 	int mbMute = pValue->value.integer.value[0];
 
 	mutex_lock(&pTAS2557->codec_lock);
-
-	dev_dbg(pTAS2557->dev, "tas2557_mute_ctrl_put = %d\n", mbMute);
 
 	tas2557_permanent_mute(pTAS2557, mbMute);
 
@@ -291,8 +257,6 @@ static int tas2557_power_ctrl_get(struct snd_kcontrol *pKcontrol,
 	mutex_lock(&pTAS2557->codec_lock);
 
 	pValue->value.integer.value[0] = pTAS2557->mbPowerUp;
-	dev_dbg(pTAS2557->dev, "tas2557_power_ctrl_get = %d\n",
-		pTAS2557->mbPowerUp);
 
 	mutex_unlock(&pTAS2557->codec_lock);
 	return 0;
@@ -312,7 +276,6 @@ static int tas2557_power_ctrl_put(struct snd_kcontrol *pKcontrol,
 
 	mutex_lock(&pTAS2557->codec_lock);
 
-	dev_dbg(pTAS2557->dev, "tas2557_power_ctrl_put = %d\n", nPowerOn);
 	tas2557_enable(pTAS2557, (nPowerOn != 0));
 
 	mutex_unlock(&pTAS2557->codec_lock);
@@ -366,7 +329,6 @@ static int tas2557_fs_get(struct snd_kcontrol *pKcontrol,
 	if (pTAS2557->mpFirmware->mnConfigurations)
 		nFS = pTAS2557->mpFirmware->mpConfigurations[pTAS2557->mnCurrentConfiguration].mnSamplingRate;
 	pValue->value.integer.value[0] = nFS;
-	dev_dbg(pTAS2557->dev, "tas2557_fs_get = %d\n", nFS);
 
 	mutex_unlock(&pTAS2557->codec_lock);
 	return 0;
@@ -386,7 +348,6 @@ static int tas2557_fs_put(struct snd_kcontrol *pKcontrol,
 
 	mutex_lock(&pTAS2557->codec_lock);
 
-	dev_info(pTAS2557->dev, "tas2557_fs_put = %d\n", nFS);
 	ret = tas2557_set_sampling_rate(pTAS2557, nFS);
 
 	mutex_unlock(&pTAS2557->codec_lock);
@@ -429,8 +390,6 @@ static int tas2557_program_get(struct snd_kcontrol *pKcontrol,
 	mutex_lock(&pTAS2557->codec_lock);
 
 	pValue->value.integer.value[0] = pTAS2557->mnCurrentProgram;
-	dev_dbg(pTAS2557->dev, "tas2557_program_get = %d\n",
-		pTAS2557->mnCurrentProgram);
 
 	mutex_unlock(&pTAS2557->codec_lock);
 	return 0;
@@ -471,8 +430,6 @@ static int tas2557_configuration_get(struct snd_kcontrol *pKcontrol,
 	mutex_lock(&pTAS2557->codec_lock);
 
 	pValue->value.integer.value[0] = pTAS2557->mnCurrentConfiguration;
-	dev_dbg(pTAS2557->dev, "tas2557_configuration_get = %d\n",
-		pTAS2557->mnCurrentConfiguration);
 
 	mutex_unlock(&pTAS2557->codec_lock);
 	return 0;
@@ -492,7 +449,6 @@ static int tas2557_configuration_put(struct snd_kcontrol *pKcontrol,
 
 	mutex_lock(&pTAS2557->codec_lock);
 
-	dev_info(pTAS2557->dev, "%s = %d\n", __func__, nConfiguration);
 	ret = tas2557_set_config(pTAS2557, nConfiguration);
 
 	mutex_unlock(&pTAS2557->codec_lock);
@@ -512,9 +468,6 @@ static int tas2557_calibration_get(struct snd_kcontrol *pKcontrol,
 	mutex_lock(&pTAS2557->codec_lock);
 
 	pValue->value.integer.value[0] = pTAS2557->mnCurrentCalibration;
-	dev_info(pTAS2557->dev,
-		"tas2557_calibration_get = %d\n",
-		pTAS2557->mnCurrentCalibration);
 
 	mutex_unlock(&pTAS2557->codec_lock);
 	return 0;
@@ -645,7 +598,6 @@ int tas2557_register_codec(struct tas2557_priv *pTAS2557)
 {
 	int nResult = 0;
 
-	dev_info(pTAS2557->dev, "%s, enter\n", __func__);
 	nResult = snd_soc_register_component(pTAS2557->dev,
 		&soc_codec_driver_tas2557,
 		tas2557_dai_driver, ARRAY_SIZE(tas2557_dai_driver));
