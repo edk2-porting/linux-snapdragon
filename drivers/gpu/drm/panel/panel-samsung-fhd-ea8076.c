@@ -240,7 +240,7 @@ samsung_fhd_ea8076_create_backlight(struct mipi_dsi_device *dsi)
 	struct device *dev = &dsi->dev;
 	const struct backlight_properties props = {
 		.type = BACKLIGHT_PLATFORM,
-		.brightness = 2047,
+		.brightness = 1024,
 		.max_brightness = 2047,
 	};
 
