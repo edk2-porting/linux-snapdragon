@@ -23,7 +23,6 @@
 	};
 
 	chosen {
-		stdout-path = "serial0:115200n8";
 	};
 
 	gpio-keys {
