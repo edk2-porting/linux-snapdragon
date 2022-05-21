@@ -2021,6 +2021,7 @@ config SND_SOC_LPASS_VA_MACRO
 
 config SND_SOC_TAS2559
 	tristate "Texas Instruments TAS2559 speaker amplifier"
+	depends on MFD_SPK_ID
 	depends on I2C
 
 config SND_SOC_LPASS_RX_MACRO
