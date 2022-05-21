@@ -20,7 +20,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu gcc git flex bison bc make kmod libssl-dev tar gzip
       - name: Build kernel
         run: |
-          make perseus_defconfig
+          make sdm845_defconfig
           make -j $(nproc)
       - name: Archive artifact
         run: |
