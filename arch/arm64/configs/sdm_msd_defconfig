@@ -425,7 +425,7 @@ CONFIG_ARCH_NR_GPIO=0
 #
 # Boot options
 #
-CONFIG_CMDLINE="console=tty0 efi=novamap pd_ignore_unused clk_ignore_unused panic=120"
+CONFIG_CMDLINE="console=tty0 efi=novamap pd_ignore_unused clk_ignore_unused"
 # CONFIG_CMDLINE_FROM_BOOTLOADER is not set
 CONFIG_CMDLINE_FORCE=y
 CONFIG_EFI_STUB=y
