@@ -59,7 +59,7 @@
 };
 
 // Devices that depend on the ones above
-&lpasscore {
+&lpass_core {
     status = "disabled";
 };
 
