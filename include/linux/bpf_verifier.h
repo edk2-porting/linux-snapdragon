@@ -72,6 +72,18 @@ struct bpf_reg_state {
 
 		u32 mem_size; /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
 
+		/* For dynptr stack slots */
+		struct {
+			enum bpf_dynptr_type type;
+			/* A dynptr is 16 bytes so it takes up 2 stack slots.
+			 * We need to track which slot is the first slot
+			 * to protect against cases where the user may try to
+			 * pass in an address starting at the second slot of the
+			 * dynptr.
+			 */
+			bool first_slot;
+		} dynptr;
+
 		/* Max size from any of the above. */
 		struct {
 			unsigned long raw1;
@@ -88,6 +100,8 @@ struct bpf_reg_state {
 	 * for the purpose of tracking that it's freed.
 	 * For PTR_TO_SOCKET this is used to share which pointers retain the
 	 * same reference to the socket, to determine proper reference freeing.
+	 * For stack slots that are dynptrs, this is used to track references to
+	 * the dynptr to determine proper reference freeing.
 	 */
 	u32 id;
 	/* PTR_TO_SOCKET and PTR_TO_TCP_SOCK could be a ptr returned
@@ -174,9 +188,15 @@ enum bpf_stack_slot_type {
 	STACK_SPILL,      /* register spilled into stack */
 	STACK_MISC,	  /* BPF program wrote some data into this slot */
 	STACK_ZERO,	  /* BPF program wrote constant zero */
+	/* A dynptr is stored in this stack slot. The type of dynptr
+	 * is stored in bpf_stack_state->spilled_ptr.dynptr.type
+	 */
+	STACK_DYNPTR,
 };
 
 #define BPF_REG_SIZE 8	/* size of eBPF register in bytes */
+#define BPF_DYNPTR_SIZE		sizeof(struct bpf_dynptr_kern)
+#define BPF_DYNPTR_NR_SLOTS		(BPF_DYNPTR_SIZE / BPF_REG_SIZE)
 
 struct bpf_stack_state {
 	struct bpf_reg_state spilled_ptr;
@@ -192,6 +212,17 @@ struct bpf_reference_state {
 	 * is used purely to inform the user of a reference leak.
 	 */
 	int insn_idx;
+	/* There can be a case like:
+	 * main (frame 0)
+	 *  cb (frame 1)
+	 *   func (frame 3)
+	 *    cb (frame 4)
+	 * Hence for frame 4, if callback_ref just stored boolean, it would be
+	 * impossible to distinguish nested callback refs. Hence store the
+	 * frameno and compare that to callback_ref in check_reference_leak when
+	 * exiting a callback function.
+	 */
+	int callback_ref;
 };
 
 /* state of the program:
@@ -279,7 +310,7 @@ struct bpf_verifier_state {
 	 * If is_state_visited() sees a state with branches > 0 it means
 	 * there is a loop. If such state is exactly equal to the current state
 	 * it's an infinite loop. Note states_equal() checks for states
-	 * equvalency, so two states being 'states_equal' does not mean
+	 * equivalency, so two states being 'states_equal' does not mean
 	 * infinite loop. The exact comparison is provided by
 	 * states_maybe_looping() function. It's a stronger pre-check and
 	 * much faster than states_equal().
@@ -317,11 +348,40 @@ struct bpf_verifier_state {
 	     iter < frame->allocated_stack / BPF_REG_SIZE;		\
 	     iter++, reg = bpf_get_spilled_reg(iter, frame))
 
+/* Invoke __expr over regsiters in __vst, setting __state and __reg */
+#define bpf_for_each_reg_in_vstate(__vst, __state, __reg, __expr)   \
+	({                                                               \
+		struct bpf_verifier_state *___vstate = __vst;            \
+		int ___i, ___j;                                          \
+		for (___i = 0; ___i <= ___vstate->curframe; ___i++) {    \
+			struct bpf_reg_state *___regs;                   \
+			__state = ___vstate->frame[___i];                \
+			___regs = __state->regs;                         \
+			for (___j = 0; ___j < MAX_BPF_REG; ___j++) {     \
+				__reg = &___regs[___j];                  \
+				(void)(__expr);                          \
+			}                                                \
+			bpf_for_each_spilled_reg(___j, __state, __reg) { \
+				if (!__reg)                              \
+					continue;                        \
+				(void)(__expr);                          \
+			}                                                \
+		}                                                        \
+	})
+
 /* linked list of verifier states used to prune search */
 struct bpf_verifier_state_list {
 	struct bpf_verifier_state state;
 	struct bpf_verifier_state_list *next;
 	int miss_cnt, hit_cnt;
+};
+
+struct bpf_loop_inline_state {
+	unsigned int initialized:1; /* set to true upon first entry */
+	unsigned int fit_for_inline:1; /* true if callback function is the same
+					* at each call and flags are always zero
+					*/
+	u32 callback_subprogno; /* valid when fit_for_inline is true */
 };
 
 /* Possible states for alu_state member. */
@@ -353,6 +413,10 @@ struct bpf_insn_aux_data {
 				u32 mem_size;	/* mem_size for non-struct typed var */
 			};
 		} btf_var;
+		/* if instruction is a call to bpf_loop this field tracks
+		 * the state of the relevant registers to make decision about inlining
+		 */
+		struct bpf_loop_inline_state loop_inline_state;
 	};
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
@@ -521,6 +585,11 @@ bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt);
 
 int check_ptr_off_reg(struct bpf_verifier_env *env,
 		      const struct bpf_reg_state *reg, int regno);
+int check_func_arg_reg_off(struct bpf_verifier_env *env,
+			   const struct bpf_reg_state *reg, int regno,
+			   enum bpf_arg_type arg_type);
+int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+			     u32 regno);
 int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 		   u32 regno, u32 mem_size);
 
@@ -562,6 +631,13 @@ static inline u32 base_type(u32 type)
 static inline u32 type_flag(u32 type)
 {
 	return type & ~BPF_BASE_TYPE_MASK;
+}
+
+/* only use after check_attach_btf_id() */
+static inline enum bpf_prog_type resolve_prog_type(struct bpf_prog *prog)
+{
+	return prog->type == BPF_PROG_TYPE_EXT ?
+		prog->aux->dst_prog->type : prog->type;
 }
 
 #endif /* _LINUX_BPF_VERIFIER_H */

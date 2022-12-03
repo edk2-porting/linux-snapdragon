@@ -111,7 +111,8 @@ static const struct fec_devinfo fec_imx6q_info = {
 	.quirks = FEC_QUIRK_ENET_MAC | FEC_QUIRK_HAS_GBIT |
 		  FEC_QUIRK_HAS_BUFDESC_EX | FEC_QUIRK_HAS_CSUM |
 		  FEC_QUIRK_HAS_VLAN | FEC_QUIRK_ERR006358 |
-		  FEC_QUIRK_HAS_RACC | FEC_QUIRK_CLEAR_SETUP_MII,
+		  FEC_QUIRK_HAS_RACC | FEC_QUIRK_CLEAR_SETUP_MII |
+		  FEC_QUIRK_HAS_PMQOS,
 };
 
 static const struct fec_devinfo fec_mvf600_info = {
@@ -656,7 +657,7 @@ fec_enet_txq_put_data_tso(struct fec_enet_priv_tx_q *txq, struct sk_buff *skb,
 		dev_kfree_skb_any(skb);
 		if (net_ratelimit())
 			netdev_err(ndev, "Tx DMA memory map failed\n");
-		return NETDEV_TX_BUSY;
+		return NETDEV_TX_OK;
 	}
 
 	bdp->cbd_datlen = cpu_to_fec16(size);
@@ -691,7 +692,7 @@ fec_enet_txq_put_hdr_tso(struct fec_enet_priv_tx_q *txq,
 			 struct bufdesc *bdp, int index)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
-	int hdr_len = skb_transport_offset(skb) + tcp_hdrlen(skb);
+	int hdr_len = skb_tcp_all_headers(skb);
 	struct bufdesc_ex *ebdp = container_of(bdp, struct bufdesc_ex, desc);
 	void *bufaddr;
 	unsigned long dmabuf;
@@ -718,7 +719,7 @@ fec_enet_txq_put_hdr_tso(struct fec_enet_priv_tx_q *txq,
 			dev_kfree_skb_any(skb);
 			if (net_ratelimit())
 				netdev_err(ndev, "Tx DMA memory map failed\n");
-			return NETDEV_TX_BUSY;
+			return NETDEV_TX_OK;
 		}
 	}
 
@@ -2346,6 +2347,31 @@ static u32 fec_enet_register_offset[] = {
 	IEEE_R_DROP, IEEE_R_FRAME_OK, IEEE_R_CRC, IEEE_R_ALIGN, IEEE_R_MACERR,
 	IEEE_R_FDXFC, IEEE_R_OCTETS_OK
 };
+/* for i.MX6ul */
+static u32 fec_enet_register_offset_6ul[] = {
+	FEC_IEVENT, FEC_IMASK, FEC_R_DES_ACTIVE_0, FEC_X_DES_ACTIVE_0,
+	FEC_ECNTRL, FEC_MII_DATA, FEC_MII_SPEED, FEC_MIB_CTRLSTAT, FEC_R_CNTRL,
+	FEC_X_CNTRL, FEC_ADDR_LOW, FEC_ADDR_HIGH, FEC_OPD, FEC_TXIC0, FEC_RXIC0,
+	FEC_HASH_TABLE_HIGH, FEC_HASH_TABLE_LOW, FEC_GRP_HASH_TABLE_HIGH,
+	FEC_GRP_HASH_TABLE_LOW, FEC_X_WMRK, FEC_R_DES_START_0,
+	FEC_X_DES_START_0, FEC_R_BUFF_SIZE_0, FEC_R_FIFO_RSFL, FEC_R_FIFO_RSEM,
+	FEC_R_FIFO_RAEM, FEC_R_FIFO_RAFL, FEC_RACC,
+	RMON_T_DROP, RMON_T_PACKETS, RMON_T_BC_PKT, RMON_T_MC_PKT,
+	RMON_T_CRC_ALIGN, RMON_T_UNDERSIZE, RMON_T_OVERSIZE, RMON_T_FRAG,
+	RMON_T_JAB, RMON_T_COL, RMON_T_P64, RMON_T_P65TO127, RMON_T_P128TO255,
+	RMON_T_P256TO511, RMON_T_P512TO1023, RMON_T_P1024TO2047,
+	RMON_T_P_GTE2048, RMON_T_OCTETS,
+	IEEE_T_DROP, IEEE_T_FRAME_OK, IEEE_T_1COL, IEEE_T_MCOL, IEEE_T_DEF,
+	IEEE_T_LCOL, IEEE_T_EXCOL, IEEE_T_MACERR, IEEE_T_CSERR, IEEE_T_SQE,
+	IEEE_T_FDXFC, IEEE_T_OCTETS_OK,
+	RMON_R_PACKETS, RMON_R_BC_PKT, RMON_R_MC_PKT, RMON_R_CRC_ALIGN,
+	RMON_R_UNDERSIZE, RMON_R_OVERSIZE, RMON_R_FRAG, RMON_R_JAB,
+	RMON_R_RESVD_O, RMON_R_P64, RMON_R_P65TO127, RMON_R_P128TO255,
+	RMON_R_P256TO511, RMON_R_P512TO1023, RMON_R_P1024TO2047,
+	RMON_R_P_GTE2048, RMON_R_OCTETS,
+	IEEE_R_DROP, IEEE_R_FRAME_OK, IEEE_R_CRC, IEEE_R_ALIGN, IEEE_R_MACERR,
+	IEEE_R_FDXFC, IEEE_R_OCTETS_OK
+};
 #else
 static __u32 fec_enet_register_version = 1;
 static u32 fec_enet_register_offset[] = {
@@ -2370,7 +2396,24 @@ static void fec_enet_get_regs(struct net_device *ndev,
 	u32 *buf = (u32 *)regbuf;
 	u32 i, off;
 	int ret;
+#if defined(CONFIG_M523x) || defined(CONFIG_M527x) || defined(CONFIG_M528x) || \
+	defined(CONFIG_M520x) || defined(CONFIG_M532x) || defined(CONFIG_ARM) || \
+	defined(CONFIG_ARM64) || defined(CONFIG_COMPILE_TEST)
+	u32 *reg_list;
+	u32 reg_cnt;
 
+	if (!of_machine_is_compatible("fsl,imx6ul")) {
+		reg_list = fec_enet_register_offset;
+		reg_cnt = ARRAY_SIZE(fec_enet_register_offset);
+	} else {
+		reg_list = fec_enet_register_offset_6ul;
+		reg_cnt = ARRAY_SIZE(fec_enet_register_offset_6ul);
+	}
+#else
+	/* coldfire */
+	static u32 *reg_list = fec_enet_register_offset;
+	static const u32 reg_cnt = ARRAY_SIZE(fec_enet_register_offset);
+#endif
 	ret = pm_runtime_resume_and_get(dev);
 	if (ret < 0)
 		return;
@@ -2379,8 +2422,8 @@ static void fec_enet_get_regs(struct net_device *ndev,
 
 	memset(buf, 0, regs->len);
 
-	for (i = 0; i < ARRAY_SIZE(fec_enet_register_offset); i++) {
-		off = fec_enet_register_offset[i];
+	for (i = 0; i < reg_cnt; i++) {
+		off = reg_list[i];
 
 		if ((off == FEC_R_BOUND || off == FEC_R_FSTART) &&
 		    !(fep->quirks & FEC_QUIRK_HAS_FRREG))
@@ -2797,7 +2840,7 @@ static int fec_enet_eee_mode_set(struct net_device *ndev, bool enable)
 	int ret = 0;
 
 	if (enable) {
-		ret = phy_init_eee(ndev->phydev, 0);
+		ret = phy_init_eee(ndev->phydev, false);
 		if (ret)
 			return ret;
 
@@ -3076,7 +3119,7 @@ fec_enet_alloc_rxq_buffers(struct net_device *ndev, unsigned int queue)
 	rxq = fep->rx_queue[queue];
 	bdp = rxq->bd.base;
 	for (i = 0; i < rxq->bd.ring_size; i++) {
-		skb = netdev_alloc_skb(ndev, FEC_ENET_RX_FRSIZE);
+		skb = __netdev_alloc_skb(ndev, FEC_ENET_RX_FRSIZE, GFP_KERNEL);
 		if (!skb)
 			goto err_alloc;
 
@@ -3210,6 +3253,9 @@ fec_enet_open(struct net_device *ndev)
 	if (fep->quirks & FEC_QUIRK_ERR006687)
 		imx6q_cpuidle_fec_irqs_used();
 
+	if (fep->quirks & FEC_QUIRK_HAS_PMQOS)
+		cpu_latency_qos_add_request(&fep->pm_qos_req, 0);
+
 	napi_enable(&fep->napi);
 	phy_start(ndev->phydev);
 	netif_tx_start_all_queues(ndev);
@@ -3251,6 +3297,9 @@ fec_enet_close(struct net_device *ndev)
 	fec_enet_update_ethtool_stats(ndev);
 
 	fec_enet_clk_enable(ndev, false);
+	if (fep->quirks & FEC_QUIRK_HAS_PMQOS)
+		cpu_latency_qos_remove_request(&fep->pm_qos_req);
+
 	pinctrl_pm_select_sleep_state(&fep->pdev->dev);
 	pm_runtime_mark_last_busy(&fep->pdev->dev);
 	pm_runtime_put_autosuspend(&fep->pdev->dev);
@@ -3566,7 +3615,7 @@ static int fec_enet_init(struct net_device *ndev)
 		ndev->features |= NETIF_F_HW_VLAN_CTAG_RX;
 
 	if (fep->quirks & FEC_QUIRK_HAS_CSUM) {
-		netif_set_gso_max_segs(ndev, FEC_MAX_TSO_SEGS);
+		netif_set_tso_max_segs(ndev, FEC_MAX_TSO_SEGS);
 
 		/* enable hw accelerator */
 		ndev->features |= (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM
@@ -3866,17 +3915,21 @@ fec_probe(struct platform_device *pdev)
 	fep->itr_clk_rate = clk_get_rate(fep->clk_ahb);
 
 	/* enet_out is optional, depends on board */
-	fep->clk_enet_out = devm_clk_get(&pdev->dev, "enet_out");
-	if (IS_ERR(fep->clk_enet_out))
-		fep->clk_enet_out = NULL;
+	fep->clk_enet_out = devm_clk_get_optional(&pdev->dev, "enet_out");
+	if (IS_ERR(fep->clk_enet_out)) {
+		ret = PTR_ERR(fep->clk_enet_out);
+		goto failed_clk;
+	}
 
 	fep->ptp_clk_on = false;
 	mutex_init(&fep->ptp_clk_mutex);
 
 	/* clk_ref is optional, depends on board */
-	fep->clk_ref = devm_clk_get(&pdev->dev, "enet_clk_ref");
-	if (IS_ERR(fep->clk_ref))
-		fep->clk_ref = NULL;
+	fep->clk_ref = devm_clk_get_optional(&pdev->dev, "enet_clk_ref");
+	if (IS_ERR(fep->clk_ref)) {
+		ret = PTR_ERR(fep->clk_ref);
+		goto failed_clk;
+	}
 	fep->clk_ref_rate = clk_get_rate(fep->clk_ref);
 
 	/* clk_2x_txclk is optional, depends on board */

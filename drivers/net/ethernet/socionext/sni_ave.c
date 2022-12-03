@@ -1229,6 +1229,8 @@ static int ave_init(struct net_device *ndev)
 
 	phy_support_asym_pause(phydev);
 
+	phydev->mac_managed_pm = true;
+
 	phy_attached_info(phydev);
 
 	return 0;
@@ -1689,8 +1691,7 @@ static int ave_probe(struct platform_device *pdev)
 	/* Register as a NAPI supported driver */
 	netif_napi_add(ndev, &priv->napi_rx, ave_napi_poll_rx,
 		       NAPI_POLL_WEIGHT);
-	netif_tx_napi_add(ndev, &priv->napi_tx, ave_napi_poll_tx,
-			  NAPI_POLL_WEIGHT);
+	netif_napi_add_tx(ndev, &priv->napi_tx, ave_napi_poll_tx);
 
 	platform_set_drvdata(pdev, ndev);
 
@@ -1757,6 +1758,10 @@ static int ave_resume(struct device *dev)
 	int ret = 0;
 
 	ave_global_reset(ndev);
+
+	ret = phy_init_hw(ndev->phydev);
+	if (ret)
+		return ret;
 
 	ave_ethtool_get_wol(ndev, &wol);
 	wol.wolopts = priv->wolopts;

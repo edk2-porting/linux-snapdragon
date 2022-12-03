@@ -150,9 +150,9 @@ static void dcn31_hpo_dp_stream_enc_dp_blank(
 	 * 10us*5000=50ms. This covers 41.7ms of minimum 24 Hz mode +
 	 * a little more because we may not trust delay accuracy.
 	 */
-	//REG_WAIT(DP_SYM32_ENC_VID_STREAM_CONTROL,
-	//		VID_STREAM_STATUS, 0,
-	//		10, 5000);
+	REG_WAIT(DP_SYM32_ENC_VID_STREAM_CONTROL,
+			VID_STREAM_STATUS, 0,
+			10, 5000);
 
 	/* Disable SDP tranmission */
 	REG_UPDATE(DP_SYM32_ENC_SDP_CONTROL,
@@ -710,6 +710,16 @@ static void dcn31_hpo_dp_stream_enc_read_state(
 	}
 }
 
+static void dcn31_set_hblank_min_symbol_width(
+		struct hpo_dp_stream_encoder *enc,
+		uint16_t width)
+{
+	struct dcn31_hpo_dp_stream_encoder *enc3 = DCN3_1_HPO_DP_STREAM_ENC_FROM_HPO_STREAM_ENC(enc);
+
+	REG_SET(DP_SYM32_ENC_HBLANK_CONTROL, 0,
+			HBLANK_MINIMUM_SYMBOL_WIDTH, width);
+}
+
 static const struct hpo_dp_stream_encoder_funcs dcn30_str_enc_funcs = {
 	.enable_stream = dcn31_hpo_dp_stream_enc_enable_stream,
 	.dp_unblank = dcn31_hpo_dp_stream_enc_dp_unblank,
@@ -725,6 +735,7 @@ static const struct hpo_dp_stream_encoder_funcs dcn30_str_enc_funcs = {
 	.dp_audio_enable = dcn31_hpo_dp_stream_enc_audio_enable,
 	.dp_audio_disable = dcn31_hpo_dp_stream_enc_audio_disable,
 	.read_state = dcn31_hpo_dp_stream_enc_read_state,
+	.set_hblank_min_symbol_width = dcn31_set_hblank_min_symbol_width,
 };
 
 void dcn31_hpo_dp_stream_encoder_construct(

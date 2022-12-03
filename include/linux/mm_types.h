@@ -85,7 +85,21 @@ struct page {
 			 * lruvec->lru_lock.  Sometimes used as a generic list
 			 * by the page owner.
 			 */
-			struct list_head lru;
+			union {
+				struct list_head lru;
+
+				/* Or, for the Unevictable "LRU list" slot */
+				struct {
+					/* Always even, to negate PageTail */
+					void *__filler;
+					/* Count page's or folio's mlocks */
+					unsigned int mlock_count;
+				};
+
+				/* Or, free page */
+				struct list_head buddy_list;
+				struct list_head pcp_list;
+			};
 			/* See page-flags.h for PAGE_MAPPING_FLAGS */
 			struct address_space *mapping;
 			pgoff_t index;		/* Our offset within mapping. */
@@ -126,11 +140,14 @@ struct page {
 			unsigned char compound_dtor;
 			unsigned char compound_order;
 			atomic_t compound_mapcount;
+			atomic_t compound_pincount;
+#ifdef CONFIG_64BIT
 			unsigned int compound_nr; /* 1 << compound_order */
+#endif
 		};
 		struct {	/* Second tail page of compound page */
 			unsigned long _compound_pad_1;	/* compound_head */
-			atomic_t hpage_pinned_refcount;
+			unsigned long _compound_pad_2;
 			/* For both global and memcg */
 			struct list_head deferred_list;
 		};
@@ -215,6 +232,7 @@ struct page {
  * struct folio - Represents a contiguous set of bytes.
  * @flags: Identical to the page flags.
  * @lru: Least Recently Used list; tracks how recently this folio was used.
+ * @mlock_count: Number of times this folio has been pinned by mlock().
  * @mapping: The file this page belongs to, or refers to the anon_vma for
  *    anonymous memory.
  * @index: Offset within the file, in units of pages.  For anonymous memory,
@@ -241,7 +259,17 @@ struct folio {
 		struct {
 	/* public: */
 			unsigned long flags;
-			struct list_head lru;
+			union {
+				struct list_head lru;
+	/* private: avoid cluttering the output */
+				struct {
+					void *__filler;
+	/* public: */
+					unsigned int mlock_count;
+	/* private: */
+				};
+	/* public: */
+			};
 			struct address_space *mapping;
 			pgoff_t index;
 			void *private;
@@ -285,7 +313,7 @@ static inline atomic_t *compound_mapcount_ptr(struct page *page)
 
 static inline atomic_t *compound_pincount_ptr(struct page *page)
 {
-	return &page[2].hpage_pinned_refcount;
+	return &page[1].compound_pincount;
 }
 
 /*
@@ -634,8 +662,15 @@ struct mm_struct {
 #endif
 		struct work_struct async_put_work;
 
-#ifdef CONFIG_IOMMU_SUPPORT
+#ifdef CONFIG_IOMMU_SVA
 		u32 pasid;
+#endif
+#ifdef CONFIG_KSM
+		/*
+		 * Represent how many pages of this process are involved in KSM
+		 * merging.
+		 */
+		unsigned long ksm_merging_pages;
 #endif
 	} __randomize_layout;
 
@@ -699,6 +734,7 @@ typedef __bitwise unsigned int vm_fault_t;
  * @VM_FAULT_NEEDDSYNC:		->fault did not modify page tables and needs
  *				fsync() to complete (for synchronous page faults
  *				in DAX)
+ * @VM_FAULT_COMPLETED:		->fault completed, meanwhile mmap lock released
  * @VM_FAULT_HINDEX_MASK:	mask HINDEX value
  *
  */
@@ -716,6 +752,7 @@ enum vm_fault_reason {
 	VM_FAULT_FALLBACK       = (__force vm_fault_t)0x000800,
 	VM_FAULT_DONE_COW       = (__force vm_fault_t)0x001000,
 	VM_FAULT_NEEDDSYNC      = (__force vm_fault_t)0x002000,
+	VM_FAULT_COMPLETED      = (__force vm_fault_t)0x004000,
 	VM_FAULT_HINDEX_MASK    = (__force vm_fault_t)0x0f0000,
 };
 
@@ -794,6 +831,11 @@ typedef struct {
  * @FAULT_FLAG_REMOTE: The fault is not for current task/mm.
  * @FAULT_FLAG_INSTRUCTION: The fault was during an instruction fetch.
  * @FAULT_FLAG_INTERRUPTIBLE: The fault can be interrupted by non-fatal signals.
+ * @FAULT_FLAG_UNSHARE: The fault is an unsharing request to unshare (and mark
+ *                      exclusive) a possibly shared anonymous page that is
+ *                      mapped R/O.
+ * @FAULT_FLAG_ORIG_PTE_VALID: whether the fault has vmf->orig_pte cached.
+ *                        We should only access orig_pte if this flag set.
  *
  * About @FAULT_FLAG_ALLOW_RETRY and @FAULT_FLAG_TRIED: we can specify
  * whether we would allow page faults to retry by specifying these two
@@ -813,6 +855,10 @@ typedef struct {
  * continuous faults with flags (b).  We should always try to detect pending
  * signals before a retry to make sure the continuous page faults can still be
  * interrupted if necessary.
+ *
+ * The combination FAULT_FLAG_WRITE|FAULT_FLAG_UNSHARE is illegal.
+ * FAULT_FLAG_UNSHARE is ignored and treated like an ordinary read fault when
+ * no existing R/O-mapped anonymous page is encountered.
  */
 enum fault_flag {
 	FAULT_FLAG_WRITE =		1 << 0,
@@ -825,6 +871,10 @@ enum fault_flag {
 	FAULT_FLAG_REMOTE =		1 << 7,
 	FAULT_FLAG_INSTRUCTION =	1 << 8,
 	FAULT_FLAG_INTERRUPTIBLE =	1 << 9,
+	FAULT_FLAG_UNSHARE =		1 << 10,
+	FAULT_FLAG_ORIG_PTE_VALID =	1 << 11,
 };
+
+typedef unsigned int __bitwise zap_flags_t;
 
 #endif /* _LINUX_MM_TYPES_H */

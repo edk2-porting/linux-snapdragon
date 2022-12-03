@@ -96,6 +96,7 @@ enum HNAE3_DEV_CAP_BITS {
 	HNAE3_DEV_SUPPORT_PORT_VLAN_BYPASS_B,
 	HNAE3_DEV_SUPPORT_VLAN_FLTR_MDF_B,
 	HNAE3_DEV_SUPPORT_MC_MAC_MNG_B,
+	HNAE3_DEV_SUPPORT_CQ_B,
 };
 
 #define hnae3_dev_fd_supported(hdev) \
@@ -155,6 +156,9 @@ enum HNAE3_DEV_CAP_BITS {
 #define hnae3_ae_dev_mc_mac_mng_supported(ae_dev) \
 	test_bit(HNAE3_DEV_SUPPORT_MC_MAC_MNG_B, (ae_dev)->caps)
 
+#define hnae3_ae_dev_cq_supported(ae_dev) \
+	test_bit(HNAE3_DEV_SUPPORT_CQ_B, (ae_dev)->caps)
+
 enum HNAE3_PF_CAP_BITS {
 	HNAE3_PF_SUPPORT_VLAN_FLTR_MDF_B = 0,
 };
@@ -167,6 +171,7 @@ struct hnae3_handle;
 
 struct hnae3_queue {
 	void __iomem *io_base;
+	void __iomem *mem_base;
 	struct hnae3_ae_algo *ae_algo;
 	struct hnae3_handle *handle;
 	int tqp_index;		/* index in a handle */
@@ -764,6 +769,7 @@ struct hnae3_tc_info {
 	u8 prio_tc[HNAE3_MAX_USER_PRIO]; /* TC indexed by prio */
 	u16 tqp_count[HNAE3_MAX_TC];
 	u16 tqp_offset[HNAE3_MAX_TC];
+	u8 max_tc; /* Total number of TCs */
 	u8 num_tc; /* Total number of enabled TCs */
 	bool mqprio_active;
 };
@@ -784,7 +790,6 @@ struct hnae3_knic_private_info {
 	const struct hnae3_dcb_ops *dcb_ops;
 
 	u16 int_rl_setting;
-	enum pkt_hash_types rss_type;
 	void __iomem *io_base;
 };
 

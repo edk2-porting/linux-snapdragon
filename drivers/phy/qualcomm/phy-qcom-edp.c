@@ -335,9 +335,11 @@ static int qcom_edp_phy_power_on(struct phy *phy)
 	writel(0x00, edp->tx0 + TXn_LANE_MODE_1);
 	writel(0x00, edp->tx1 + TXn_LANE_MODE_1);
 
-	ret = qcom_edp_configure_ssc(edp);
-	if (ret)
-		return ret;
+	if (edp->dp_opts.ssc) {
+		ret = qcom_edp_configure_ssc(edp);
+		if (ret)
+			return ret;
+	}
 
 	ret = qcom_edp_configure_pll(edp);
 	if (ret)
@@ -637,6 +639,18 @@ static int qcom_edp_phy_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	ret = regulator_set_load(edp->supplies[0].consumer, 21800); /* 1.2 V vdda-phy */
+	if (ret) {
+		dev_err(dev, "failed to set load at %s\n", edp->supplies[0].supply);
+		return ret;
+	}
+
+	ret = regulator_set_load(edp->supplies[1].consumer, 36000); /* 0.9 V vdda-pll */
+	if (ret) {
+		dev_err(dev, "failed to set load at %s\n", edp->supplies[1].supply);
+		return ret;
+	}
+
 	ret = qcom_edp_clks_register(edp, pdev->dev.of_node);
 	if (ret)
 		return ret;
@@ -654,6 +668,7 @@ static int qcom_edp_phy_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id qcom_edp_phy_match_table[] = {
+	{ .compatible = "qcom,sc7280-edp-phy" },
 	{ .compatible = "qcom,sc8180x-edp-phy" },
 	{ }
 };

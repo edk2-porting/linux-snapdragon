@@ -39,6 +39,8 @@
 
 #include <linux/sched/mm.h>
 #include <linux/hmm.h>
+#include <linux/memremap.h>
+#include <linux/migrate.h>
 
 /*
  * FIXME: this is ugly right now we are using TTM to allocate vram and we pin
@@ -324,7 +326,6 @@ nouveau_dmem_page_alloc_locked(struct nouveau_drm *drm)
 			return NULL;
 	}
 
-	get_page(page);
 	lock_page(page);
 	return page;
 }
@@ -679,7 +680,11 @@ nouveau_dmem_migrate_vma(struct nouveau_drm *drm,
 		goto out_free_dma;
 
 	for (i = 0; i < npages; i += max) {
-		args.end = start + (max << PAGE_SHIFT);
+		if (args.start + (max << PAGE_SHIFT) > end)
+			args.end = end;
+		else
+			args.end = args.start + (max << PAGE_SHIFT);
+
 		ret = migrate_vma_setup(&args);
 		if (ret)
 			goto out_free_pfns;

@@ -564,9 +564,6 @@ static void apple_dart_release_device(struct device *dev)
 {
 	struct apple_dart_master_cfg *cfg = dev_iommu_priv_get(dev);
 
-	if (!cfg)
-		return;
-
 	dev_iommu_priv_set(dev, NULL);
 	kfree(cfg);
 }
@@ -765,24 +762,25 @@ static void apple_dart_get_resv_regions(struct device *dev,
 
 static const struct iommu_ops apple_dart_iommu_ops = {
 	.domain_alloc = apple_dart_domain_alloc,
-	.domain_free = apple_dart_domain_free,
-	.attach_dev = apple_dart_attach_dev,
-	.detach_dev = apple_dart_detach_dev,
-	.map_pages = apple_dart_map_pages,
-	.unmap_pages = apple_dart_unmap_pages,
-	.flush_iotlb_all = apple_dart_flush_iotlb_all,
-	.iotlb_sync = apple_dart_iotlb_sync,
-	.iotlb_sync_map = apple_dart_iotlb_sync_map,
-	.iova_to_phys = apple_dart_iova_to_phys,
 	.probe_device = apple_dart_probe_device,
 	.release_device = apple_dart_release_device,
 	.device_group = apple_dart_device_group,
 	.of_xlate = apple_dart_of_xlate,
 	.def_domain_type = apple_dart_def_domain_type,
 	.get_resv_regions = apple_dart_get_resv_regions,
-	.put_resv_regions = generic_iommu_put_resv_regions,
 	.pgsize_bitmap = -1UL, /* Restricted during dart probe */
 	.owner = THIS_MODULE,
+	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.attach_dev	= apple_dart_attach_dev,
+		.detach_dev	= apple_dart_detach_dev,
+		.map_pages	= apple_dart_map_pages,
+		.unmap_pages	= apple_dart_unmap_pages,
+		.flush_iotlb_all = apple_dart_flush_iotlb_all,
+		.iotlb_sync	= apple_dart_iotlb_sync,
+		.iotlb_sync_map	= apple_dart_iotlb_sync_map,
+		.iova_to_phys	= apple_dart_iova_to_phys,
+		.free		= apple_dart_domain_free,
+	}
 };
 
 static irqreturn_t apple_dart_irq(int irq, void *dev)

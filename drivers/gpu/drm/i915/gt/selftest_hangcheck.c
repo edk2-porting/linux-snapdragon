@@ -6,7 +6,9 @@
 #include <linux/kthread.h>
 
 #include "gem/i915_gem_context.h"
+#include "gem/i915_gem_internal.h"
 
+#include "i915_gem_evict.h"
 #include "intel_gt.h"
 #include "intel_engine_heartbeat.h"
 #include "intel_engine_pm.h"
@@ -974,6 +976,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 {
 	struct i915_gpu_error *global = &gt->i915->gpu_error;
 	struct intel_engine_cs *engine, *other;
+	struct active_engine *threads;
 	enum intel_engine_id id, tmp;
 	struct hang h;
 	int err = 0;
@@ -994,8 +997,11 @@ static int __igt_reset_engines(struct intel_gt *gt,
 			h.ctx->sched.priority = 1024;
 	}
 
+	threads = kmalloc_array(I915_NUM_ENGINES, sizeof(*threads), GFP_KERNEL);
+	if (!threads)
+		return -ENOMEM;
+
 	for_each_engine(engine, gt, id) {
-		struct active_engine threads[I915_NUM_ENGINES] = {};
 		unsigned long device = i915_reset_count(global);
 		unsigned long count = 0, reported;
 		bool using_guc = intel_engine_uses_guc(engine);
@@ -1014,7 +1020,7 @@ static int __igt_reset_engines(struct intel_gt *gt,
 			break;
 		}
 
-		memset(threads, 0, sizeof(threads));
+		memset(threads, 0, sizeof(*threads) * I915_NUM_ENGINES);
 		for_each_engine(other, gt, tmp) {
 			struct task_struct *tsk;
 
@@ -1234,6 +1240,7 @@ unwind:
 			break;
 		}
 	}
+	kfree(threads);
 
 	if (intel_gt_is_wedged(gt))
 		err = -EIO;
@@ -1382,7 +1389,7 @@ static int evict_vma(void *data)
 	complete(&arg->completion);
 
 	mutex_lock(&vm->mutex);
-	err = i915_gem_evict_for_node(vm, &evict, 0);
+	err = i915_gem_evict_for_node(vm, NULL, &evict, 0);
 	mutex_unlock(&vm->mutex);
 
 	return err;

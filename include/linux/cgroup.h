@@ -450,6 +450,7 @@ extern struct mutex cgroup_mutex;
 extern spinlock_t css_set_lock;
 #define task_css_set_check(task, __c)					\
 	rcu_dereference_check((task)->cgroups,				\
+		rcu_read_lock_sched_held() ||				\
 		lockdep_is_held(&cgroup_mutex) ||			\
 		lockdep_is_held(&css_set_lock) ||			\
 		((task)->flags & PF_EXITING) || (__c))
@@ -673,7 +674,7 @@ static inline void pr_cont_cgroup_path(struct cgroup *cgrp)
 
 static inline struct psi_group *cgroup_psi(struct cgroup *cgrp)
 {
-	return &cgrp->psi;
+	return cgrp->psi;
 }
 
 bool cgroup_psi_enabled(void);
@@ -733,11 +734,6 @@ static inline struct cgroup *cgroup_parent(struct cgroup *cgrp)
 	return NULL;
 }
 
-static inline struct psi_group *cgroup_psi(struct cgroup *cgrp)
-{
-	return NULL;
-}
-
 static inline bool cgroup_psi_enabled(void)
 {
 	return false;
@@ -791,11 +787,9 @@ static inline void cgroup_account_cputime(struct task_struct *task,
 
 	cpuacct_charge(task, delta_exec);
 
-	rcu_read_lock();
 	cgrp = task_dfl_cgroup(task);
 	if (cgroup_parent(cgrp))
 		__cgroup_account_cputime(cgrp, delta_exec);
-	rcu_read_unlock();
 }
 
 static inline void cgroup_account_cputime_field(struct task_struct *task,
@@ -806,11 +800,9 @@ static inline void cgroup_account_cputime_field(struct task_struct *task,
 
 	cpuacct_account_field(task, index, delta_exec);
 
-	rcu_read_lock();
 	cgrp = task_dfl_cgroup(task);
 	if (cgroup_parent(cgrp))
 		__cgroup_account_cputime_field(cgrp, index, delta_exec);
-	rcu_read_unlock();
 }
 
 #else	/* CONFIG_CGROUPS */

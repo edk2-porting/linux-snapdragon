@@ -100,7 +100,7 @@ struct admv1013_state {
 	unsigned int		input_mode;
 	unsigned int		quad_se_mode;
 	bool			det_en;
-	u8			data[3] ____cacheline_aligned;
+	u8			data[3] __aligned(IIO_DMA_MINALIGN);
 };
 
 static int __admv1013_spi_read(struct admv1013_state *st, unsigned int reg,
@@ -630,7 +630,7 @@ static int admv1013_probe(struct spi_device *spi)
 }
 
 static const struct spi_device_id admv1013_id[] = {
-	{ "admv1013", 0},
+	{ "admv1013", 0 },
 	{}
 };
 MODULE_DEVICE_TABLE(spi, admv1013_id);

@@ -66,6 +66,18 @@ MODULE_PARM_DESC(shared_mem,
 static struct cpufreq_driver amd_pstate_driver;
 
 /**
+ * struct  amd_aperf_mperf
+ * @aperf: actual performance frequency clock count
+ * @mperf: maximum performance frequency clock count
+ * @tsc:   time stamp counter
+ */
+struct amd_aperf_mperf {
+	u64 aperf;
+	u64 mperf;
+	u64 tsc;
+};
+
+/**
  * struct amd_cpudata - private CPU data for AMD P-State
  * @cpu: CPU number
  * @req: constraint request to apply
@@ -81,6 +93,9 @@ static struct cpufreq_driver amd_pstate_driver;
  * @min_freq: the frequency that mapped to lowest_perf
  * @nominal_freq: the frequency that mapped to nominal_perf
  * @lowest_nonlinear_freq: the frequency that mapped to lowest_nonlinear_perf
+ * @cur: Difference of Aperf/Mperf/tsc count between last and current sample
+ * @prev: Last Aperf/Mperf/tsc count value read from register
+ * @freq: current cpu frequency value
  * @boost_supported: check whether the Processor or SBIOS supports boost mode
  *
  * The amd_cpudata is key private data for each CPU thread in AMD P-State, and
@@ -102,6 +117,10 @@ struct amd_cpudata {
 	u32	nominal_freq;
 	u32	lowest_nonlinear_freq;
 
+	struct amd_aperf_mperf cur;
+	struct amd_aperf_mperf prev;
+
+	u64 freq;
 	bool	boost_supported;
 };
 
@@ -133,6 +152,7 @@ static inline int amd_pstate_enable(bool enable)
 static int pstate_init_perf(struct amd_cpudata *cpudata)
 {
 	u64 cap1;
+	u32 highest_perf;
 
 	int ret = rdmsrl_safe_on_cpu(cpudata->cpu, MSR_AMD_CPPC_CAP1,
 				     &cap1);
@@ -144,7 +164,11 @@ static int pstate_init_perf(struct amd_cpudata *cpudata)
 	 *
 	 * CPPC entry doesn't indicate the highest performance in some ASICs.
 	 */
-	WRITE_ONCE(cpudata->highest_perf, amd_get_highest_perf());
+	highest_perf = amd_get_highest_perf();
+	if (highest_perf > AMD_CPPC_HIGHEST_PERF(cap1))
+		highest_perf = AMD_CPPC_HIGHEST_PERF(cap1);
+
+	WRITE_ONCE(cpudata->highest_perf, highest_perf);
 
 	WRITE_ONCE(cpudata->nominal_perf, AMD_CPPC_NOMINAL_PERF(cap1));
 	WRITE_ONCE(cpudata->lowest_nonlinear_perf, AMD_CPPC_LOWNONLIN_PERF(cap1));
@@ -156,12 +180,17 @@ static int pstate_init_perf(struct amd_cpudata *cpudata)
 static int cppc_init_perf(struct amd_cpudata *cpudata)
 {
 	struct cppc_perf_caps cppc_perf;
+	u32 highest_perf;
 
 	int ret = cppc_get_perf_caps(cpudata->cpu, &cppc_perf);
 	if (ret)
 		return ret;
 
-	WRITE_ONCE(cpudata->highest_perf, amd_get_highest_perf());
+	highest_perf = amd_get_highest_perf();
+	if (highest_perf > cppc_perf.highest_perf)
+		highest_perf = cppc_perf.highest_perf;
+
+	WRITE_ONCE(cpudata->highest_perf, highest_perf);
 
 	WRITE_ONCE(cpudata->nominal_perf, cppc_perf.nominal_perf);
 	WRITE_ONCE(cpudata->lowest_nonlinear_perf,
@@ -211,6 +240,39 @@ static inline void amd_pstate_update_perf(struct amd_cpudata *cpudata,
 					    max_perf, fast_switch);
 }
 
+static inline bool amd_pstate_sample(struct amd_cpudata *cpudata)
+{
+	u64 aperf, mperf, tsc;
+	unsigned long flags;
+
+	local_irq_save(flags);
+	rdmsrl(MSR_IA32_APERF, aperf);
+	rdmsrl(MSR_IA32_MPERF, mperf);
+	tsc = rdtsc();
+
+	if (cpudata->prev.mperf == mperf || cpudata->prev.tsc == tsc) {
+		local_irq_restore(flags);
+		return false;
+	}
+
+	local_irq_restore(flags);
+
+	cpudata->cur.aperf = aperf;
+	cpudata->cur.mperf = mperf;
+	cpudata->cur.tsc =  tsc;
+	cpudata->cur.aperf -= cpudata->prev.aperf;
+	cpudata->cur.mperf -= cpudata->prev.mperf;
+	cpudata->cur.tsc -= cpudata->prev.tsc;
+
+	cpudata->prev.aperf = aperf;
+	cpudata->prev.mperf = mperf;
+	cpudata->prev.tsc = tsc;
+
+	cpudata->freq = div64_u64((cpudata->cur.aperf * cpu_khz), cpudata->cur.mperf);
+
+	return true;
+}
+
 static void amd_pstate_update(struct amd_cpudata *cpudata, u32 min_perf,
 			      u32 des_perf, u32 max_perf, bool fast_switch)
 {
@@ -226,8 +288,11 @@ static void amd_pstate_update(struct amd_cpudata *cpudata, u32 min_perf,
 	value &= ~AMD_CPPC_MAX_PERF(~0L);
 	value |= AMD_CPPC_MAX_PERF(max_perf);
 
-	trace_amd_pstate_perf(min_perf, des_perf, max_perf,
-			      cpudata->cpu, (value != prev), fast_switch);
+	if (trace_amd_pstate_perf_enabled() && amd_pstate_sample(cpudata)) {
+		trace_amd_pstate_perf(min_perf, des_perf, max_perf, cpudata->freq,
+			cpudata->cur.mperf, cpudata->cur.aperf, cpudata->cur.tsc,
+				cpudata->cpu, (value != prev), fast_switch);
+	}
 
 	if (value == prev)
 		return;
@@ -257,7 +322,7 @@ static int amd_pstate_target(struct cpufreq_policy *policy,
 		return -ENODEV;
 
 	cap_perf = READ_ONCE(cpudata->highest_perf);
-	min_perf = READ_ONCE(cpudata->lowest_nonlinear_perf);
+	min_perf = READ_ONCE(cpudata->lowest_perf);
 	max_perf = cap_perf;
 
 	freqs.old = policy->cur;
@@ -511,6 +576,28 @@ static int amd_pstate_cpu_exit(struct cpufreq_policy *policy)
 	return 0;
 }
 
+static int amd_pstate_cpu_resume(struct cpufreq_policy *policy)
+{
+	int ret;
+
+	ret = amd_pstate_enable(true);
+	if (ret)
+		pr_err("failed to enable amd-pstate during resume, return %d\n", ret);
+
+	return ret;
+}
+
+static int amd_pstate_cpu_suspend(struct cpufreq_policy *policy)
+{
+	int ret;
+
+	ret = amd_pstate_enable(false);
+	if (ret)
+		pr_err("failed to disable amd-pstate during suspend, return %d\n", ret);
+
+	return ret;
+}
+
 /* Sysfs attributes */
 
 /*
@@ -581,6 +668,8 @@ static struct cpufreq_driver amd_pstate_driver = {
 	.target		= amd_pstate_target,
 	.init		= amd_pstate_cpu_init,
 	.exit		= amd_pstate_cpu_exit,
+	.suspend	= amd_pstate_cpu_suspend,
+	.resume		= amd_pstate_cpu_resume,
 	.set_boost	= amd_pstate_set_boost,
 	.name		= "amd-pstate",
 	.attr           = amd_pstate_attr,

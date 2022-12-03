@@ -32,9 +32,16 @@ MODULE_PARM_DESC(ignore_wake,
 		 "controller@pin combos on which to ignore the ACPI wake flag "
 		 "ignore_wake=controller@pin[,controller@pin[,...]]");
 
+static char *ignore_interrupt;
+module_param(ignore_interrupt, charp, 0444);
+MODULE_PARM_DESC(ignore_interrupt,
+		 "controller@pin combos on which to ignore interrupt "
+		 "ignore_interrupt=controller@pin[,controller@pin[,...]]");
+
 struct acpi_gpiolib_dmi_quirk {
 	bool no_edge_events_on_boot;
 	char *ignore_wake;
+	char *ignore_interrupt;
 };
 
 /**
@@ -108,7 +115,7 @@ static int acpi_gpiochip_find(struct gpio_chip *gc, void *data)
  * controller does not have GPIO chip registered at the moment. This is to
  * support probe deferral.
  */
-static struct gpio_desc *acpi_get_gpiod(char *path, int pin)
+static struct gpio_desc *acpi_get_gpiod(char *path, unsigned int pin)
 {
 	struct gpio_chip *chip;
 	acpi_handle handle;
@@ -136,7 +143,7 @@ static struct gpio_desc *acpi_get_gpiod(char *path, int pin)
  * as it is intended for use outside of the GPIO layer (in a similar fashion to
  * gpiod_get_index() for example) it also holds a reference to the GPIO device.
  */
-struct gpio_desc *acpi_get_and_request_gpiod(char *path, int pin, char *label)
+struct gpio_desc *acpi_get_and_request_gpiod(char *path, unsigned int pin, char *label)
 {
 	struct gpio_desc *gpio;
 	int ret;
@@ -317,13 +324,15 @@ static struct gpio_desc *acpi_request_own_gpiod(struct gpio_chip *chip,
 	return desc;
 }
 
-static bool acpi_gpio_in_ignore_list(const char *controller_in, int pin_in)
+static bool acpi_gpio_in_ignore_list(const char *ignore_list, const char *controller_in,
+				     unsigned int pin_in)
 {
 	const char *controller, *pin_str;
-	int len, pin;
+	unsigned int pin;
 	char *endp;
+	int len;
 
-	controller = ignore_wake;
+	controller = ignore_list;
 	while (controller) {
 		pin_str = strchr(controller, '@');
 		if (!pin_str)
@@ -347,20 +356,20 @@ static bool acpi_gpio_in_ignore_list(const char *controller_in, int pin_in)
 
 	return false;
 err:
-	pr_err_once("Error: Invalid value for gpiolib_acpi.ignore_wake: %s\n", ignore_wake);
+	pr_err_once("Error: Invalid value for gpiolib_acpi.ignore_...: %s\n", ignore_list);
 	return false;
 }
 
 static bool acpi_gpio_irq_is_wake(struct device *parent,
 				  struct acpi_resource_gpio *agpio)
 {
-	int pin = agpio->pin_table[0];
+	unsigned int pin = agpio->pin_table[0];
 
 	if (agpio->wake_capable != ACPI_WAKE_CAPABLE)
 		return false;
 
-	if (acpi_gpio_in_ignore_list(dev_name(parent), pin)) {
-		dev_info(parent, "Ignoring wakeup on pin %d\n", pin);
+	if (acpi_gpio_in_ignore_list(ignore_wake, dev_name(parent), pin)) {
+		dev_info(parent, "Ignoring wakeup on pin %u\n", pin);
 		return false;
 	}
 
@@ -378,7 +387,8 @@ static acpi_status acpi_gpiochip_alloc_event(struct acpi_resource *ares,
 	struct acpi_gpio_event *event;
 	irq_handler_t handler = NULL;
 	struct gpio_desc *desc;
-	int ret, pin, irq;
+	unsigned int pin;
+	int ret, irq;
 
 	if (!acpi_gpio_get_irq_resource(ares, &agpio))
 		return AE_OK;
@@ -423,6 +433,11 @@ static acpi_status acpi_gpiochip_alloc_event(struct acpi_resource *ares,
 			"Failed to translate GPIO pin 0x%04X to IRQ, err %d\n",
 			pin, irq);
 		goto fail_unlock_irq;
+	}
+
+	if (acpi_gpio_in_ignore_list(ignore_interrupt, dev_name(chip->parent), pin)) {
+		dev_info(chip->parent, "Ignoring interrupt on pin %u\n", pin);
+		return AE_OK;
 	}
 
 	event = kzalloc(sizeof(*event), GFP_KERNEL);
@@ -684,6 +699,9 @@ int acpi_gpio_update_gpiod_lookup_flags(unsigned long *lookupflags,
 		break;
 	case ACPI_PIN_CONFIG_PULLDOWN:
 		*lookupflags |= GPIO_PULL_DOWN;
+		break;
+	case ACPI_PIN_CONFIG_NOPULL:
+		*lookupflags |= GPIO_PULL_DISABLE;
 		break;
 	default:
 		break;
@@ -1098,7 +1116,7 @@ acpi_gpio_adr_space_handler(u32 function, acpi_physical_address address,
 
 	length = min_t(u16, agpio->pin_table_length, pin_index + bits);
 	for (i = pin_index; i < length; ++i) {
-		int pin = agpio->pin_table[i];
+		unsigned int pin = agpio->pin_table[i];
 		struct acpi_gpio_connection *conn;
 		struct gpio_desc *desc;
 		bool found;
@@ -1558,6 +1576,20 @@ static const struct dmi_system_id gpiolib_acpi_quirks[] __initconst = {
 			.ignore_wake = "INT33FF:01@0",
 		},
 	},
+	{
+		/*
+		 * Interrupt storm caused from edge triggered floating pin
+		 * Found in BIOS UX325UAZ.300
+		 * https://bugzilla.kernel.org/show_bug.cgi?id=216208
+		 */
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "ZenBook UX325UAZ_UM325UAZ"),
+		},
+		.driver_data = &(struct acpi_gpiolib_dmi_quirk) {
+			.ignore_interrupt = "AMDI0030:00@18",
+		},
+	},
 	{} /* Terminating entry */
 };
 
@@ -1579,6 +1611,9 @@ static int __init acpi_gpio_setup_params(void)
 
 	if (ignore_wake == NULL && quirk && quirk->ignore_wake)
 		ignore_wake = quirk->ignore_wake;
+
+	if (ignore_interrupt == NULL && quirk && quirk->ignore_interrupt)
+		ignore_interrupt = quirk->ignore_interrupt;
 
 	return 0;
 }

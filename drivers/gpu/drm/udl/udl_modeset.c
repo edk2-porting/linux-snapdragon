@@ -264,7 +264,8 @@ static int udl_aligned_damage_clip(struct drm_rect *clip, int x, int y,
 	return 0;
 }
 
-static int udl_handle_damage(struct drm_framebuffer *fb, const struct dma_buf_map *map,
+static int udl_handle_damage(struct drm_framebuffer *fb,
+			     const struct iosys_map *map,
 			     int x, int y, int width, int height)
 {
 	struct drm_device *dev = fb->dev;
@@ -380,9 +381,6 @@ udl_simple_display_pipe_enable(struct drm_simple_display_pipe *pipe,
 	udl->mode_buf_len = wrptr - buf;
 
 	udl_handle_damage(fb, &shadow_plane_state->data[0], 0, 0, fb->width, fb->height);
-
-	if (!crtc_state->mode_changed)
-		return;
 
 	/* enable display */
 	udl_crtc_write_mode_to_hw(crtc);

@@ -460,7 +460,7 @@ static __u32 tpacket_get_timestamp(struct sk_buff *skb, struct timespec64 *ts,
 		return TP_STATUS_TS_RAW_HARDWARE;
 
 	if ((flags & SOF_TIMESTAMPING_SOFTWARE) &&
-	    ktime_to_timespec64_cond(skb->tstamp, ts))
+	    ktime_to_timespec64_cond(skb_tstamp(skb), ts))
 		return TP_STATUS_TS_SOFTWARE;
 
 	return 0;
@@ -1924,10 +1924,20 @@ oom:
 
 static void packet_parse_headers(struct sk_buff *skb, struct socket *sock)
 {
+	int depth;
+
 	if ((!skb->protocol || skb->protocol == htons(ETH_P_ALL)) &&
 	    sock->type == SOCK_RAW) {
 		skb_reset_mac_header(skb);
 		skb->protocol = dev_parse_header_protocol(skb);
+	}
+
+	/* Move network header to the right position for VLAN tagged packets */
+	if (likely(skb->dev->type == ARPHRD_ETHER) &&
+	    eth_type_vlan(skb->protocol) &&
+	    __vlan_get_protocol(skb, skb->protocol, &depth) != 0) {
+		if (pskb_may_pull(skb, depth))
+			skb_set_network_header(skb, depth);
 	}
 
 	skb_probe_transport_header(skb);
@@ -2199,6 +2209,7 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 	spin_lock(&sk->sk_receive_queue.lock);
 	po->stats.stats1.tp_packets++;
 	sock_skb_set_dropcount(sk, skb);
+	skb_clear_delivery_time(skb);
 	__skb_queue_tail(&sk->sk_receive_queue, skb);
 	spin_unlock(&sk->sk_receive_queue.lock);
 	sk->sk_data_ready(sk);
@@ -2380,6 +2391,7 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 	po->stats.stats1.tp_packets++;
 	if (copy_skb) {
 		status |= TP_STATUS_COPY;
+		skb_clear_delivery_time(copy_skb);
 		__skb_queue_tail(&sk->sk_receive_queue, copy_skb);
 	}
 	spin_unlock(&sk->sk_receive_queue.lock);
@@ -3025,8 +3037,8 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	if (err)
 		goto out_free;
 
-	if (sock->type == SOCK_RAW &&
-	    !dev_validate_header(dev, skb->data, len)) {
+	if ((sock->type == SOCK_RAW &&
+	     !dev_validate_header(dev, skb->data, len)) || !skb->len) {
 		err = -EINVAL;
 		goto out_free;
 	}
@@ -3045,6 +3057,11 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	skb->mark = sockc.mark;
 	skb->tstamp = sockc.transmit_time;
 
+	if (unlikely(extra_len == 4))
+		skb->no_fcs = 1;
+
+	packet_parse_headers(skb, sock);
+
 	if (has_vnet_hdr) {
 		err = virtio_net_hdr_to_skb(skb, &vnet_hdr, vio_le());
 		if (err)
@@ -3052,11 +3069,6 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 		len += sizeof(vnet_hdr);
 		virtio_net_hdr_set_proto(skb, &vnet_hdr);
 	}
-
-	packet_parse_headers(skb, sock);
-
-	if (unlikely(extra_len == 4))
-		skb->no_fcs = 1;
 
 	err = po->xmit(skb);
 	if (unlikely(err != 0)) {
@@ -3122,7 +3134,7 @@ static int packet_release(struct socket *sock)
 	packet_cached_dev_reset(po);
 
 	if (po->prot_hook.dev) {
-		dev_put_track(po->prot_hook.dev, &po->prot_hook.dev_tracker);
+		netdev_put(po->prot_hook.dev, &po->prot_hook.dev_tracker);
 		po->prot_hook.dev = NULL;
 	}
 	spin_unlock(&po->bind_lock);
@@ -3223,15 +3235,15 @@ static int packet_do_bind(struct sock *sk, const char *name, int ifindex,
 		WRITE_ONCE(po->num, proto);
 		po->prot_hook.type = proto;
 
-		dev_put_track(po->prot_hook.dev, &po->prot_hook.dev_tracker);
+		netdev_put(po->prot_hook.dev, &po->prot_hook.dev_tracker);
 
 		if (unlikely(unlisted)) {
 			po->prot_hook.dev = NULL;
 			WRITE_ONCE(po->ifindex, -1);
 			packet_cached_dev_reset(po);
 		} else {
-			dev_hold_track(dev, &po->prot_hook.dev_tracker,
-				       GFP_ATOMIC);
+			netdev_hold(dev, &po->prot_hook.dev_tracker,
+				    GFP_ATOMIC);
 			po->prot_hook.dev = dev;
 			WRITE_ONCE(po->ifindex, dev ? dev->ifindex : 0);
 			packet_cached_dev_assign(po, dev);
@@ -3424,7 +3436,7 @@ static int packet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 	 *	but then it will block.
 	 */
 
-	skb = skb_recv_datagram(sk, flags, flags & MSG_DONTWAIT, &err);
+	skb = skb_recv_datagram(sk, flags, &err);
 
 	/*
 	 *	An error occurred so return it. Because skb_recv_datagram()
@@ -3467,7 +3479,7 @@ static int packet_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 		sll->sll_protocol = skb->protocol;
 	}
 
-	sock_recv_ts_and_drops(msg, sk, skb);
+	sock_recv_cmsgs(msg, sk, skb);
 
 	if (msg->msg_name) {
 		const size_t max_len = min(sizeof(skb->cb),
@@ -4155,8 +4167,8 @@ static int packet_notifier(struct notifier_block *this,
 				if (msg == NETDEV_UNREGISTER) {
 					packet_cached_dev_reset(po);
 					WRITE_ONCE(po->ifindex, -1);
-					dev_put_track(po->prot_hook.dev,
-						      &po->prot_hook.dev_tracker);
+					netdev_put(po->prot_hook.dev,
+						   &po->prot_hook.dev_tracker);
 					po->prot_hook.dev = NULL;
 				}
 				spin_unlock(&po->bind_lock);

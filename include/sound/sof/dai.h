@@ -111,9 +111,14 @@ struct sof_ipc_dai_config {
 		struct sof_ipc_dai_sai_params sai;
 		struct sof_ipc_dai_acp_params acpbt;
 		struct sof_ipc_dai_acp_params acpsp;
-		struct sof_ipc_dai_acp_params acpdmic;
+		struct sof_ipc_dai_acpdmic_params acpdmic;
 		struct sof_ipc_dai_mtk_afe_params afe;
 	};
 } __packed;
+
+struct sof_dai_private_data {
+	struct sof_ipc_comp_dai *comp_dai;
+	struct sof_ipc_dai_config *dai_config;
+};
 
 #endif

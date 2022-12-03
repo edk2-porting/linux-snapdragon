@@ -113,7 +113,7 @@ properties:
 patternProperties:
   "^watchdog@[a-f0-9]+$":
     type: object
-    $ref: ../watchdog/watchdog.yaml#
+    $ref: /schemas/watchdog/watchdog.yaml#
     properties:
       compatible:
         oneOf:
@@ -145,13 +145,14 @@ patternProperties:
 
   "^pwm@[a-f0-9]+$":
     type: object
-    $ref: ../pwm/pwm.yaml#
+    $ref: /schemas/pwm/pwm.yaml#
     properties:
       compatible:
         oneOf:
           - enum:
               - ingenic,jz4740-pwm
               - ingenic,jz4725b-pwm
+              - ingenic,x1000-pwm
           - items:
               - enum:
                   - ingenic,jz4760-pwm

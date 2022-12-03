@@ -346,6 +346,7 @@ int nfs40_init_client(struct nfs_client *clp)
 	ret = nfs4_setup_slot_table(tbl, NFS4_MAX_SLOT_TABLE,
 					"NFSv4.0 transport Slot table");
 	if (ret) {
+		nfs4_shutdown_slot_table(tbl);
 		kfree(tbl);
 		return ret;
 	}
@@ -1161,9 +1162,9 @@ static int nfs4_init_server(struct nfs_server *server, struct fs_context *fc)
 		return error;
 
 	if (ctx->rsize)
-		server->rsize = nfs_block_size(ctx->rsize, NULL);
+		server->rsize = nfs_io_size(ctx->rsize, server->nfs_client->cl_proto);
 	if (ctx->wsize)
-		server->wsize = nfs_block_size(ctx->wsize, NULL);
+		server->wsize = nfs_io_size(ctx->wsize, server->nfs_client->cl_proto);
 
 	server->acregmin = ctx->acregmin * HZ;
 	server->acregmax = ctx->acregmax * HZ;

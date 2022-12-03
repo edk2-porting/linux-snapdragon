@@ -17,6 +17,8 @@
 #include <linux/soc/marvell/octeontx2/asm.h>
 #include <net/pkt_cls.h>
 #include <net/devlink.h>
+#include <linux/time64.h>
+#include <linux/dim.h>
 
 #include <mbox.h>
 #include <npc.h>
@@ -52,6 +54,11 @@ enum arua_mapped_qtypes {
 
 /* Send skid of 2000 packets required for CQ size of 4K CQEs. */
 #define SEND_CQ_SKID	2000
+
+#define OTX2_GET_RX_STATS(reg) \
+	otx2_read64(pfvf, NIX_LF_RX_STATX(reg))
+#define OTX2_GET_TX_STATS(reg) \
+	otx2_read64(pfvf, NIX_LF_TX_STATX(reg))
 
 struct otx2_lmt_info {
 	u64 lmt_addr;
@@ -178,12 +185,17 @@ struct otx2_hw {
 	u16			rqpool_cnt;
 	u16			sqpool_cnt;
 
+#define OTX2_DEFAULT_RBUF_LEN	2048
+	u16			rbuf_len;
+	u32			xqe_size;
+
 	/* NPA */
 	u32			stack_pg_ptrs;  /* No of ptrs per stack page */
 	u32			stack_pg_bytes; /* Size of stack page */
 	u16			sqb_size;
 
 	/* NIX */
+	u8			txschq_link_cfg_lvl;
 	u16		txschq_list[NIX_TXSCH_LVL_CNT][MAX_TXSCHQ_PER_FUNC];
 	u16			matchall_ipolicer;
 	u32			dwrr_mtu;
@@ -272,6 +284,8 @@ struct otx2_ptp {
 	u64 thresh;
 
 	struct ptp_pin_desc extts_config;
+	u64 (*convert_rx_ptp_tstmp)(u64 timestamp);
+	u64 (*convert_tx_ptp_tstmp)(u64 timestamp);
 };
 
 #define OTX2_HW_TIMESTAMP_LEN	8
@@ -301,8 +315,8 @@ struct otx2_flow_config {
 #define OTX2_VF_VLAN_TX_INDEX	1
 	u16			max_flows;
 	u8			dmacflt_max_flows;
-	u8			*bmap_to_dmacindex;
-	unsigned long		dmacflt_bmap;
+	u32			*bmap_to_dmacindex;
+	unsigned long		*dmacflt_bmap;
 	struct list_head	flow_list;
 };
 
@@ -344,6 +358,7 @@ struct otx2_nic {
 #define OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED	BIT_ULL(12)
 #define OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED	BIT_ULL(13)
 #define OTX2_FLAG_DMACFLTR_SUPPORT		BIT_ULL(14)
+#define OTX2_FLAG_ADPTV_INT_COAL_ENABLED BIT_ULL(16)
 	u64			flags;
 	u64			*cq_op_addr;
 
@@ -396,6 +411,14 @@ struct otx2_nic {
 
 	/* Devlink */
 	struct otx2_devlink	*dl;
+#ifdef CONFIG_DCB
+	/* PFC */
+	u8			pfc_en;
+	u8			*queue_to_pfc_map;
+#endif
+
+	/* napi event count. It is needed for adaptive irq coalescing. */
+	u32 napi_events;
 };
 
 static inline bool is_otx2_lbkvf(struct pci_dev *pdev)
@@ -863,6 +886,8 @@ int otx2_enable_rxvlan(struct otx2_nic *pf, bool enable);
 int otx2_install_rxvlan_offload_flow(struct otx2_nic *pfvf);
 bool otx2_xdp_sq_append_pkt(struct otx2_nic *pfvf, u64 iova, int len, u16 qidx);
 u16 otx2_get_max_mtu(struct otx2_nic *pfvf);
+int otx2_handle_ntuple_tc_features(struct net_device *netdev,
+				   netdev_features_t features);
 /* tc support */
 int otx2_init_tc(struct otx2_nic *nic);
 void otx2_shutdown_tc(struct otx2_nic *nic);
@@ -871,9 +896,16 @@ int otx2_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 int otx2_tc_alloc_ent_bitmap(struct otx2_nic *nic);
 /* CGX/RPM DMAC filters support */
 int otx2_dmacflt_get_max_cnt(struct otx2_nic *pf);
-int otx2_dmacflt_add(struct otx2_nic *pf, const u8 *mac, u8 bit_pos);
-int otx2_dmacflt_remove(struct otx2_nic *pf, const u8 *mac, u8 bit_pos);
-int otx2_dmacflt_update(struct otx2_nic *pf, u8 *mac, u8 bit_pos);
+int otx2_dmacflt_add(struct otx2_nic *pf, const u8 *mac, u32 bit_pos);
+int otx2_dmacflt_remove(struct otx2_nic *pf, const u8 *mac, u32 bit_pos);
+int otx2_dmacflt_update(struct otx2_nic *pf, u8 *mac, u32 bit_pos);
 void otx2_dmacflt_reinstall_flows(struct otx2_nic *pf);
 void otx2_dmacflt_update_pfmac_flow(struct otx2_nic *pfvf);
+
+#ifdef CONFIG_DCB
+/* DCB support*/
+void otx2_update_bpid_in_rqctx(struct otx2_nic *pfvf, int vlan_prio, int qidx, bool pfc_enable);
+int otx2_config_priority_flow_ctrl(struct otx2_nic *pfvf);
+int otx2_dcbnl_set_ops(struct net_device *dev);
+#endif
 #endif /* OTX2_COMMON_H */

@@ -450,6 +450,11 @@ static struct dentry *__debugfs_create_file(const char *name, umode_t mode,
  *
  * If debugfs is not enabled in the kernel, the value -%ENODEV will be
  * returned.
+ *
+ * NOTE: it's expected that most callers should _ignore_ the errors returned
+ * by this function. Other debugfs functions handle the fact that the "dentry"
+ * passed to them could be an error and they don't crash in that case.
+ * Drivers should generally work fine even if debugfs fails to init anyway.
  */
 struct dentry *debugfs_create_file(const char *name, umode_t mode,
 				   struct dentry *parent, void *data,
@@ -551,6 +556,11 @@ EXPORT_SYMBOL_GPL(debugfs_create_file_size);
  *
  * If debugfs is not enabled in the kernel, the value -%ENODEV will be
  * returned.
+ *
+ * NOTE: it's expected that most callers should _ignore_ the errors returned
+ * by this function. Other debugfs functions handle the fact that the "dentry"
+ * passed to them could be an error and they don't crash in that case.
+ * Drivers should generally work fine even if debugfs fails to init anyway.
  */
 struct dentry *debugfs_create_dir(const char *name, struct dentry *parent)
 {
@@ -733,6 +743,28 @@ void debugfs_remove(struct dentry *dentry)
 	simple_release_fs(&debugfs_mount, &debugfs_mount_count);
 }
 EXPORT_SYMBOL_GPL(debugfs_remove);
+
+/**
+ * debugfs_lookup_and_remove - lookup a directory or file and recursively remove it
+ * @name: a pointer to a string containing the name of the item to look up.
+ * @parent: a pointer to the parent dentry of the item.
+ *
+ * This is the equlivant of doing something like
+ * debugfs_remove(debugfs_lookup(..)) but with the proper reference counting
+ * handled for the directory being looked up.
+ */
+void debugfs_lookup_and_remove(const char *name, struct dentry *parent)
+{
+	struct dentry *dentry;
+
+	dentry = debugfs_lookup(name, parent);
+	if (!dentry)
+		return;
+
+	debugfs_remove(dentry);
+	dput(dentry);
+}
+EXPORT_SYMBOL_GPL(debugfs_lookup_and_remove);
 
 /**
  * debugfs_rename - rename a file/directory in the debugfs filesystem

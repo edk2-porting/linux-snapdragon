@@ -12,11 +12,16 @@
 #include <linux/platform_device.h>
 #include <linux/delay.h>
 #include <linux/spi/spi.h>
+#include <linux/iopoll.h>
 
 #define AMD_SPI_CTRL0_REG	0x00
 #define AMD_SPI_EXEC_CMD	BIT(16)
 #define AMD_SPI_FIFO_CLEAR	BIT(20)
 #define AMD_SPI_BUSY		BIT(31)
+
+#define AMD_SPI_OPCODE_REG	0x45
+#define AMD_SPI_CMD_TRIGGER_REG	0x47
+#define AMD_SPI_TRIGGER_CMD	BIT(7)
 
 #define AMD_SPI_OPCODE_MASK	0xFF
 
@@ -28,16 +33,31 @@
 #define AMD_SPI_RX_COUNT_REG	0x4B
 #define AMD_SPI_STATUS_REG	0x4C
 
+#define AMD_SPI_FIFO_SIZE	70
 #define AMD_SPI_MEM_SIZE	200
 
 /* M_CMD OP codes for SPI */
 #define AMD_SPI_XFER_TX		1
 #define AMD_SPI_XFER_RX		2
 
+/**
+ * enum amd_spi_versions - SPI controller versions
+ * @AMD_SPI_V1:		AMDI0061 hardware version
+ * @AMD_SPI_V2:		AMDI0062 hardware version
+ */
+enum amd_spi_versions {
+	AMD_SPI_V1 = 1,
+	AMD_SPI_V2,
+};
+
+/**
+ * struct amd_spi - SPI driver instance
+ * @io_remap_addr:	Start address of the SPI controller registers
+ * @version:		SPI controller hardware version
+ */
 struct amd_spi {
 	void __iomem *io_remap_addr;
-	unsigned long io_base_addr;
-	u32 rom_addr;
+	enum amd_spi_versions version;
 };
 
 static inline u8 amd_spi_readreg8(struct amd_spi *amd_spi, int idx)
@@ -81,14 +101,29 @@ static void amd_spi_select_chip(struct amd_spi *amd_spi, u8 cs)
 	amd_spi_setclear_reg8(amd_spi, AMD_SPI_ALT_CS_REG, cs, AMD_SPI_ALT_CS_MASK);
 }
 
+static inline void amd_spi_clear_chip(struct amd_spi *amd_spi, u8 chip_select)
+{
+	amd_spi_writereg8(amd_spi, AMD_SPI_ALT_CS_REG, chip_select & ~AMD_SPI_ALT_CS_MASK);
+}
+
 static void amd_spi_clear_fifo_ptr(struct amd_spi *amd_spi)
 {
 	amd_spi_setclear_reg32(amd_spi, AMD_SPI_CTRL0_REG, AMD_SPI_FIFO_CLEAR, AMD_SPI_FIFO_CLEAR);
 }
 
-static void amd_spi_set_opcode(struct amd_spi *amd_spi, u8 cmd_opcode)
+static int amd_spi_set_opcode(struct amd_spi *amd_spi, u8 cmd_opcode)
 {
-	amd_spi_setclear_reg32(amd_spi, AMD_SPI_CTRL0_REG, cmd_opcode, AMD_SPI_OPCODE_MASK);
+	switch (amd_spi->version) {
+	case AMD_SPI_V1:
+		amd_spi_setclear_reg32(amd_spi, AMD_SPI_CTRL0_REG, cmd_opcode,
+				       AMD_SPI_OPCODE_MASK);
+		return 0;
+	case AMD_SPI_V2:
+		amd_spi_writereg8(amd_spi, AMD_SPI_OPCODE_REG, cmd_opcode);
+		return 0;
+	default:
+		return -ENODEV;
+	}
 }
 
 static inline void amd_spi_set_rx_count(struct amd_spi *amd_spi, u8 rx_count)
@@ -103,16 +138,22 @@ static inline void amd_spi_set_tx_count(struct amd_spi *amd_spi, u8 tx_count)
 
 static int amd_spi_busy_wait(struct amd_spi *amd_spi)
 {
-	int timeout = 100000;
+	u32 val;
+	int reg;
 
-	/* poll for SPI bus to become idle */
-	while (amd_spi_readreg32(amd_spi, AMD_SPI_CTRL0_REG) & AMD_SPI_BUSY) {
-		usleep_range(10, 20);
-		if (timeout-- < 0)
-			return -ETIMEDOUT;
+	switch (amd_spi->version) {
+	case AMD_SPI_V1:
+		reg = AMD_SPI_CTRL0_REG;
+		break;
+	case AMD_SPI_V2:
+		reg = AMD_SPI_STATUS_REG;
+		break;
+	default:
+		return -ENODEV;
 	}
 
-	return 0;
+	return readl_poll_timeout(amd_spi->io_remap_addr + reg, val,
+				  !(val & AMD_SPI_BUSY), 20, 2000000);
 }
 
 static int amd_spi_execute_opcode(struct amd_spi *amd_spi)
@@ -123,10 +164,20 @@ static int amd_spi_execute_opcode(struct amd_spi *amd_spi)
 	if (ret)
 		return ret;
 
-	/* Set ExecuteOpCode bit in the CTRL0 register */
-	amd_spi_setclear_reg32(amd_spi, AMD_SPI_CTRL0_REG, AMD_SPI_EXEC_CMD, AMD_SPI_EXEC_CMD);
-
-	return 0;
+	switch (amd_spi->version) {
+	case AMD_SPI_V1:
+		/* Set ExecuteOpCode bit in the CTRL0 register */
+		amd_spi_setclear_reg32(amd_spi, AMD_SPI_CTRL0_REG, AMD_SPI_EXEC_CMD,
+				       AMD_SPI_EXEC_CMD);
+		return 0;
+	case AMD_SPI_V2:
+		/* Trigger the command execution */
+		amd_spi_setclear_reg8(amd_spi, AMD_SPI_CMD_TRIGGER_REG,
+				      AMD_SPI_TRIGGER_CMD, AMD_SPI_TRIGGER_CMD);
+		return 0;
+	default:
+		return -ENODEV;
+	}
 }
 
 static int amd_spi_master_setup(struct spi_device *spi)
@@ -196,6 +247,17 @@ static inline int amd_spi_fifo_xfer(struct amd_spi *amd_spi,
 	message->actual_length = tx_len + rx_len + 1;
 	/* complete the transaction */
 	message->status = 0;
+
+	switch (amd_spi->version) {
+	case AMD_SPI_V1:
+		break;
+	case AMD_SPI_V2:
+		amd_spi_clear_chip(amd_spi, message->spi->chip_select);
+		break;
+	default:
+		return -ENODEV;
+	}
+
 	spi_finalize_current_message(master);
 
 	return 0;
@@ -218,28 +280,32 @@ static int amd_spi_master_transfer(struct spi_master *master,
 	return 0;
 }
 
+static size_t amd_spi_max_transfer_size(struct spi_device *spi)
+{
+	return AMD_SPI_FIFO_SIZE;
+}
+
 static int amd_spi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct spi_master *master;
 	struct amd_spi *amd_spi;
-	int err = 0;
+	int err;
 
 	/* Allocate storage for spi_master and driver private data */
-	master = spi_alloc_master(dev, sizeof(struct amd_spi));
-	if (!master) {
-		dev_err(dev, "Error allocating SPI master\n");
-		return -ENOMEM;
-	}
+	master = devm_spi_alloc_master(dev, sizeof(struct amd_spi));
+	if (!master)
+		return dev_err_probe(dev, -ENOMEM, "Error allocating SPI master\n");
 
 	amd_spi = spi_master_get_devdata(master);
 	amd_spi->io_remap_addr = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(amd_spi->io_remap_addr)) {
-		err = PTR_ERR(amd_spi->io_remap_addr);
-		dev_err(dev, "error %d ioremap of SPI registers failed\n", err);
-		goto err_free_master;
-	}
+	if (IS_ERR(amd_spi->io_remap_addr))
+		return dev_err_probe(dev, PTR_ERR(amd_spi->io_remap_addr),
+				     "ioremap of SPI registers failed\n");
+
 	dev_dbg(dev, "io_remap_address: %p\n", amd_spi->io_remap_addr);
+
+	amd_spi->version = (enum amd_spi_versions) device_get_match_data(dev);
 
 	/* Initialize the spi_master fields */
 	master->bus_num = 0;
@@ -248,25 +314,21 @@ static int amd_spi_probe(struct platform_device *pdev)
 	master->flags = SPI_MASTER_HALF_DUPLEX;
 	master->setup = amd_spi_master_setup;
 	master->transfer_one_message = amd_spi_master_transfer;
+	master->max_transfer_size = amd_spi_max_transfer_size;
+	master->max_message_size = amd_spi_max_transfer_size;
 
 	/* Register the controller with SPI framework */
 	err = devm_spi_register_master(dev, master);
-	if (err) {
-		dev_err(dev, "error %d registering SPI controller\n", err);
-		goto err_free_master;
-	}
+	if (err)
+		return dev_err_probe(dev, err, "error registering SPI controller\n");
 
 	return 0;
-
-err_free_master:
-	spi_master_put(master);
-
-	return err;
 }
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id spi_acpi_match[] = {
-	{ "AMDI0061", 0 },
+	{ "AMDI0061", AMD_SPI_V1 },
+	{ "AMDI0062", AMD_SPI_V2 },
 	{},
 };
 MODULE_DEVICE_TABLE(acpi, spi_acpi_match);

@@ -807,7 +807,7 @@ struct els_entry_24xx {
 #define EPD_ELS_COMMAND		(0 << 13)
 #define EPD_ELS_ACC		(1 << 13)
 #define EPD_ELS_RJT		(2 << 13)
-#define EPD_RX_XCHG		(3 << 13)
+#define EPD_RX_XCHG		(3 << 13)  /* terminate exchange */
 #define ECF_CLR_PASSTHRU_PEND	BIT_12
 #define ECF_INCL_FRAME_HDR	BIT_11
 #define ECF_SEC_LOGIN		BIT_3
@@ -1706,7 +1706,7 @@ struct qla_flt_header {
 	__le16	length;
 	__le16	checksum;
 	__le16	unused;
-	struct qla_flt_region region[0];
+	struct qla_flt_region region[];
 };
 
 #define FLT_REGION_SIZE		16

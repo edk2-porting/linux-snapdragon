@@ -29,9 +29,6 @@ static int prestera_flow_block_mall_cb(struct prestera_flow_block *block,
 static int prestera_flow_block_flower_cb(struct prestera_flow_block *block,
 					 struct flow_cls_offload *f)
 {
-	if (f->common.chain_index != 0)
-		return -EOPNOTSUPP;
-
 	switch (f->command) {
 	case FLOW_CLS_REPLACE:
 		return prestera_flower_replace(block, f);
@@ -71,13 +68,16 @@ static void prestera_flow_block_destroy(void *cb_priv)
 
 	prestera_flower_template_cleanup(block);
 
+	WARN_ON(!list_empty(&block->template_list));
 	WARN_ON(!list_empty(&block->binding_list));
 
 	kfree(block);
 }
 
 static struct prestera_flow_block *
-prestera_flow_block_create(struct prestera_switch *sw, struct net *net)
+prestera_flow_block_create(struct prestera_switch *sw,
+			   struct net *net,
+			   bool ingress)
 {
 	struct prestera_flow_block *block;
 
@@ -86,8 +86,10 @@ prestera_flow_block_create(struct prestera_switch *sw, struct net *net)
 		return NULL;
 
 	INIT_LIST_HEAD(&block->binding_list);
+	INIT_LIST_HEAD(&block->template_list);
 	block->net = net;
 	block->sw = sw;
+	block->ingress = ingress;
 
 	return block;
 }
@@ -166,7 +168,8 @@ static int prestera_flow_block_unbind(struct prestera_flow_block *block,
 static struct prestera_flow_block *
 prestera_flow_block_get(struct prestera_switch *sw,
 			struct flow_block_offload *f,
-			bool *register_block)
+			bool *register_block,
+			bool ingress)
 {
 	struct prestera_flow_block *block;
 	struct flow_block_cb *block_cb;
@@ -174,7 +177,7 @@ prestera_flow_block_get(struct prestera_switch *sw,
 	block_cb = flow_block_cb_lookup(f->block,
 					prestera_flow_block_cb, sw);
 	if (!block_cb) {
-		block = prestera_flow_block_create(sw, f->net);
+		block = prestera_flow_block_create(sw, f->net, ingress);
 		if (!block)
 			return ERR_PTR(-ENOMEM);
 
@@ -210,7 +213,7 @@ static void prestera_flow_block_put(struct prestera_flow_block *block)
 }
 
 static int prestera_setup_flow_block_bind(struct prestera_port *port,
-					  struct flow_block_offload *f)
+					  struct flow_block_offload *f, bool ingress)
 {
 	struct prestera_switch *sw = port->sw;
 	struct prestera_flow_block *block;
@@ -218,7 +221,7 @@ static int prestera_setup_flow_block_bind(struct prestera_port *port,
 	bool register_block;
 	int err;
 
-	block = prestera_flow_block_get(sw, f, &register_block);
+	block = prestera_flow_block_get(sw, f, &register_block, ingress);
 	if (IS_ERR(block))
 		return PTR_ERR(block);
 
@@ -233,7 +236,11 @@ static int prestera_setup_flow_block_bind(struct prestera_port *port,
 		list_add_tail(&block_cb->driver_list, &prestera_block_cb_list);
 	}
 
-	port->flow_block = block;
+	if (ingress)
+		port->ingress_flow_block = block;
+	else
+		port->egress_flow_block = block;
+
 	return 0;
 
 err_block_bind:
@@ -243,7 +250,7 @@ err_block_bind:
 }
 
 static void prestera_setup_flow_block_unbind(struct prestera_port *port,
-					     struct flow_block_offload *f)
+					     struct flow_block_offload *f, bool ingress)
 {
 	struct prestera_switch *sw = port->sw;
 	struct prestera_flow_block *block;
@@ -267,23 +274,37 @@ static void prestera_setup_flow_block_unbind(struct prestera_port *port,
 		list_del(&block_cb->driver_list);
 	}
 error:
-	port->flow_block = NULL;
+	if (ingress)
+		port->ingress_flow_block = NULL;
+	else
+		port->egress_flow_block = NULL;
+}
+
+static int prestera_setup_flow_block_clsact(struct prestera_port *port,
+					    struct flow_block_offload *f,
+					    bool ingress)
+{
+	f->driver_block_list = &prestera_block_cb_list;
+
+	switch (f->command) {
+	case FLOW_BLOCK_BIND:
+		return prestera_setup_flow_block_bind(port, f, ingress);
+	case FLOW_BLOCK_UNBIND:
+		prestera_setup_flow_block_unbind(port, f, ingress);
+		return 0;
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 int prestera_flow_block_setup(struct prestera_port *port,
 			      struct flow_block_offload *f)
 {
-	if (f->binder_type != FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS)
-		return -EOPNOTSUPP;
-
-	f->driver_block_list = &prestera_block_cb_list;
-
-	switch (f->command) {
-	case FLOW_BLOCK_BIND:
-		return prestera_setup_flow_block_bind(port, f);
-	case FLOW_BLOCK_UNBIND:
-		prestera_setup_flow_block_unbind(port, f);
-		return 0;
+	switch (f->binder_type) {
+	case FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS:
+		return prestera_setup_flow_block_clsact(port, f, true);
+	case FLOW_BLOCK_BINDER_TYPE_CLSACT_EGRESS:
+		return prestera_setup_flow_block_clsact(port, f, false);
 	default:
 		return -EOPNOTSUPP;
 	}

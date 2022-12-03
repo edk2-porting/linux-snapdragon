@@ -826,7 +826,7 @@ static int mos77xx_calc_num_ports(struct usb_serial *serial,
 		/*
 		 * The 7715 uses the first bulk in/out endpoint pair for the
 		 * parallel port, and the second for the serial port. We swap
-		 * the endpoint descriptors here so that the the first and
+		 * the endpoint descriptors here so that the first and
 		 * only registered port structure uses the serial-port
 		 * endpoints.
 		 */
@@ -1380,30 +1380,12 @@ static void change_port_settings(struct tty_struct *tty,
 		return;
 	}
 
-	lData = UART_LCR_WLEN8;
 	lStop = 0x00;	/* 1 stop bit */
 	lParity = 0x00;	/* No parity */
 
 	cflag = tty->termios.c_cflag;
 
-	/* Change the number of bits */
-	switch (cflag & CSIZE) {
-	case CS5:
-		lData = UART_LCR_WLEN5;
-		break;
-
-	case CS6:
-		lData = UART_LCR_WLEN6;
-		break;
-
-	case CS7:
-		lData = UART_LCR_WLEN7;
-		break;
-	default:
-	case CS8:
-		lData = UART_LCR_WLEN8;
-		break;
-	}
+	lData = UART_LCR_WLEN(tty_get_char_size(cflag));
 
 	/* Change the Parity bit */
 	if (cflag & PARENB) {

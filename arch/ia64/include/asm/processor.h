@@ -243,10 +243,6 @@ DECLARE_PER_CPU(struct cpuinfo_ia64, ia64_cpu_info);
 
 extern void print_cpu_info (struct cpuinfo_ia64 *);
 
-typedef struct {
-	unsigned long seg;
-} mm_segment_t;
-
 #define SET_UNALIGN_CTL(task,value)								\
 ({												\
 	(task)->thread.flags = (((task)->thread.flags & ~IA64_THREAD_UAC_MASK)			\
@@ -542,7 +538,7 @@ ia64_get_irr(unsigned int vector)
 {
 	unsigned int reg = vector / 64;
 	unsigned int bit = vector % 64;
-	u64 irr;
+	unsigned long irr;
 
 	switch (reg) {
 	case 0: irr = ia64_getreg(_IA64_REG_CR_IRR0); break;

@@ -90,6 +90,8 @@ struct opcap {
 	u64 bits[4];
 };
 
+#define IDXD_MAX_OPCAP_BITS		256U
+
 #define IDXD_OPCAP_OFFSET		0x40
 
 #define IDXD_TABLE_OFFSET		0x60
@@ -353,6 +355,7 @@ union wqcfg {
 } __packed;
 
 #define WQCFG_PASID_IDX                2
+#define WQCFG_PRIVL_IDX		2
 #define WQCFG_OCCUP_IDX		6
 
 #define WQCFG_OCCUP_MASK	0xffff

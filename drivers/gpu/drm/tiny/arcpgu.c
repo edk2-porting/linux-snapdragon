@@ -10,11 +10,14 @@
 #include <drm/drm_debugfs.h>
 #include <drm/drm_device.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_edid.h>
 #include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_module.h>
 #include <drm/drm_of.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_simple_kms_helper.h>
@@ -427,7 +430,7 @@ static struct platform_driver arcpgu_platform_driver = {
 		   },
 };
 
-module_platform_driver(arcpgu_platform_driver);
+drm_module_platform_driver(arcpgu_platform_driver);
 
 MODULE_AUTHOR("Carlos Palminha <palminha@synopsys.com>");
 MODULE_DESCRIPTION("ARC PGU DRM driver");

@@ -41,11 +41,13 @@ properties:
     maxItems: 1
 
   st,syscfg:
-    description: Should be phandle/offset/mask
-      - Phandle to the syscon node which includes IRQ mux selection.
-      - The offset of the IRQ mux selection register.
-      - The field mask of IRQ mux, needed if different of 0xf.
+    description: Phandle+args to the syscon node which includes IRQ mux selection.
     $ref: "/schemas/types.yaml#/definitions/phandle-array"
+    items:
+      - items:
+          - description: syscon node which includes IRQ mux selection
+          - description: The offset of the IRQ mux selection register
+          - description: The field mask of IRQ mux, needed if different of 0xf
 
   st,package:
     description:
@@ -57,6 +59,7 @@ properties:
 patternProperties:
   '^gpio@[0-9a-f]*$':
     type: object
+    additionalProperties: false
     properties:
       gpio-controller: true
       '#gpio-cells':
@@ -66,8 +69,7 @@ patternProperties:
         maxItems: 1
       clocks:
         maxItems: 1
-      reset:
-        minItems: 1
+      resets:
         maxItems: 1
       gpio-ranges:
         minItems: 1

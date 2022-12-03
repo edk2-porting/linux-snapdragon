@@ -15,6 +15,7 @@ struct array_buffer;
 struct tracer;
 struct dentry;
 struct bpf_prog;
+union bpf_attr;
 
 const char *trace_print_flags_seq(struct trace_seq *p, const char *delim,
 				  unsigned long flags,
@@ -91,6 +92,7 @@ struct trace_iterator {
 	unsigned int		temp_size;
 	char			*fmt;	/* modified format holder */
 	unsigned int		fmt_size;
+	long			wait_index;
 
 	/* trace_seq for __print_flags() and __print_symbolic() etc. */
 	struct trace_seq	tmp_seq;
@@ -315,6 +317,7 @@ enum {
 	TRACE_EVENT_FL_KPROBE_BIT,
 	TRACE_EVENT_FL_UPROBE_BIT,
 	TRACE_EVENT_FL_EPROBE_BIT,
+	TRACE_EVENT_FL_CUSTOM_BIT,
 };
 
 /*
@@ -328,6 +331,9 @@ enum {
  *  KPROBE        - Event is a kprobe
  *  UPROBE        - Event is a uprobe
  *  EPROBE        - Event is an event probe
+ *  CUSTOM        - Event is a custom event (to be attached to an exsiting tracepoint)
+ *                   This is set when the custom event has not been attached
+ *                   to a tracepoint yet, then it is cleared when it is.
  */
 enum {
 	TRACE_EVENT_FL_FILTERED		= (1 << TRACE_EVENT_FL_FILTERED_BIT),
@@ -339,6 +345,7 @@ enum {
 	TRACE_EVENT_FL_KPROBE		= (1 << TRACE_EVENT_FL_KPROBE_BIT),
 	TRACE_EVENT_FL_UPROBE		= (1 << TRACE_EVENT_FL_UPROBE_BIT),
 	TRACE_EVENT_FL_EPROBE		= (1 << TRACE_EVENT_FL_EPROBE_BIT),
+	TRACE_EVENT_FL_CUSTOM		= (1 << TRACE_EVENT_FL_CUSTOM_BIT),
 };
 
 #define TRACE_EVENT_FL_UKPROBE (TRACE_EVENT_FL_KPROBE | TRACE_EVENT_FL_UPROBE)
@@ -440,7 +447,9 @@ static inline bool bpf_prog_array_valid(struct trace_event_call *call)
 static inline const char *
 trace_event_name(struct trace_event_call *call)
 {
-	if (call->flags & TRACE_EVENT_FL_TRACEPOINT)
+	if (call->flags & TRACE_EVENT_FL_CUSTOM)
+		return call->name;
+	else if (call->flags & TRACE_EVENT_FL_TRACEPOINT)
 		return call->tp ? call->tp->name : NULL;
 	else
 		return call->name;
@@ -738,6 +747,7 @@ void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp);
 int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
 			    u32 *fd_type, const char **buf,
 			    u64 *probe_offset, u64 *probe_addr);
+int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 #else
 static inline unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
@@ -779,6 +789,11 @@ static inline int bpf_get_perf_event_info(const struct perf_event *event,
 {
 	return -EOPNOTSUPP;
 }
+static inline int
+bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
 #endif
 
 enum {
@@ -799,8 +814,6 @@ extern int trace_define_field(struct trace_event_call *call, const char *type,
 extern int trace_add_event_call(struct trace_event_call *call);
 extern int trace_remove_event_call(struct trace_event_call *call);
 extern int trace_event_get_offsets(struct trace_event_call *call);
-
-#define is_signed_type(type)	(((type)(-1)) < (type)1)
 
 int ftrace_set_clr_event(struct trace_array *tr, char *buf, int set);
 int trace_set_clr_event(const char *system, const char *event, int set);
@@ -902,4 +915,37 @@ perf_trace_buf_submit(void *raw_data, int size, int rctx, u16 type,
 
 #endif
 
+#define TRACE_EVENT_STR_MAX	512
+
+/*
+ * gcc warns that you can not use a va_list in an inlined
+ * function. But lets me make it into a macro :-/
+ */
+#define __trace_event_vstr_len(fmt, va)			\
+({							\
+	va_list __ap;					\
+	int __ret;					\
+							\
+	va_copy(__ap, *(va));				\
+	__ret = vsnprintf(NULL, 0, fmt, __ap) + 1;	\
+	va_end(__ap);					\
+							\
+	min(__ret, TRACE_EVENT_STR_MAX);		\
+})
+
 #endif /* _LINUX_TRACE_EVENT_H */
+
+/*
+ * Note: we keep the TRACE_CUSTOM_EVENT outside the include file ifdef protection.
+ *  This is due to the way trace custom events work. If a file includes two
+ *  trace event headers under one "CREATE_CUSTOM_TRACE_EVENTS" the first include
+ *  will override the TRACE_CUSTOM_EVENT and break the second include.
+ */
+
+#ifndef TRACE_CUSTOM_EVENT
+
+#define DECLARE_CUSTOM_EVENT_CLASS(name, proto, args, tstruct, assign, print)
+#define DEFINE_CUSTOM_EVENT(template, name, proto, args)
+#define TRACE_CUSTOM_EVENT(name, proto, args, struct, assign, print)
+
+#endif /* ifdef TRACE_CUSTOM_EVENT (see note above) */

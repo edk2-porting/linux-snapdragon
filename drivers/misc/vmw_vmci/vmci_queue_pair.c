@@ -854,6 +854,7 @@ static int qp_notify_peer_local(bool attach, struct vmci_handle handle)
 	u32 context_id = vmci_get_context_id();
 	struct vmci_event_qp ev;
 
+	memset(&ev, 0, sizeof(ev));
 	ev.msg.hdr.dst = vmci_make_handle(context_id, VMCI_EVENT_HANDLER);
 	ev.msg.hdr.src = vmci_make_handle(VMCI_HYPERVISOR_CONTEXT_ID,
 					  VMCI_CONTEXT_RESOURCE_ID);
@@ -1467,6 +1468,7 @@ static int qp_notify_peer(bool attach,
 	 * kernel.
 	 */
 
+	memset(&ev, 0, sizeof(ev));
 	ev.msg.hdr.dst = vmci_make_handle(peer_id, VMCI_EVENT_HANDLER);
 	ev.msg.hdr.src = vmci_make_handle(VMCI_HYPERVISOR_CONTEXT_ID,
 					  VMCI_CONTEXT_RESOURCE_ID);
@@ -2577,6 +2579,12 @@ static ssize_t qp_enqueue_locked(struct vmci_queue *produce_q,
 	if (result < VMCI_SUCCESS)
 		return result;
 
+	/*
+	 * This virt_wmb() ensures that data written to the queue
+	 * is observable before the new producer_tail is.
+	 */
+	virt_wmb();
+
 	vmci_q_header_add_producer_tail(produce_q->q_header, written,
 					produce_q_size);
 	return written;
@@ -2619,6 +2627,12 @@ static ssize_t qp_dequeue_locked(struct vmci_queue *produce_q,
 
 	if (buf_ready < VMCI_SUCCESS)
 		return (ssize_t) buf_ready;
+
+	/*
+	 * This virt_rmb() ensures that data from the queue will be read
+	 * after we have determined how much is ready to be consumed.
+	 */
+	virt_rmb();
 
 	read = (size_t) (buf_ready > buf_size ? buf_size : buf_ready);
 	head = vmci_q_header_consumer_head(produce_q->q_header);

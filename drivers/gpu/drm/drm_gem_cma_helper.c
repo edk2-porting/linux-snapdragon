@@ -26,12 +26,22 @@
 /**
  * DOC: cma helpers
  *
- * The Contiguous Memory Allocator reserves a pool of memory at early boot
- * that is used to service requests for large blocks of contiguous memory.
+ * The DRM GEM/CMA helpers are a means to provide buffer objects that are
+ * presented to the device as a contiguous chunk of memory. This is useful
+ * for devices that do not support scatter-gather DMA (either directly or
+ * by using an intimately attached IOMMU).
  *
- * The DRM GEM/CMA helpers use this allocator as a means to provide buffer
- * objects that are physically contiguous in memory. This is useful for
- * display drivers that are unable to map scattered buffers via an IOMMU.
+ * Despite the name, the DRM GEM/CMA helpers are not hardwired to use the
+ * Contiguous Memory Allocator (CMA).
+ *
+ * For devices that access the memory bus through an (external) IOMMU then
+ * the buffer objects are allocated using a traditional page-based
+ * allocator and may be scattered through physical memory. However they
+ * are contiguous in the IOVA space so appear contiguous to devices using
+ * them.
+ *
+ * For other devices then the helpers rely on CMA to provide buffer
+ * objects that are physically contiguous in memory.
  *
  * For GEM callback helpers in struct &drm_gem_object functions, see likewise
  * named functions with an _object_ infix (e.g., drm_gem_cma_object_vmap() wraps
@@ -111,8 +121,14 @@ error:
  * @drm: DRM device
  * @size: size of the object to allocate
  *
- * This function creates a CMA GEM object and allocates a contiguous chunk of
- * memory as backing store.
+ * This function creates a CMA GEM object and allocates memory as backing store.
+ * The allocated memory will occupy a contiguous chunk of bus address space.
+ *
+ * For devices that are directly connected to the memory bus then the allocated
+ * memory will be physically contiguous. For devices that access through an
+ * IOMMU, then the allocated memory is not expected to be physically contiguous
+ * because having contiguous IOVAs is sufficient to meet a devices DMA
+ * requirements.
  *
  * Returns:
  * A struct drm_gem_cma_object * on success or an ERR_PTR()-encoded negative
@@ -162,9 +178,12 @@ EXPORT_SYMBOL_GPL(drm_gem_cma_create);
  * @size: size of the object to allocate
  * @handle: return location for the GEM handle
  *
- * This function creates a CMA GEM object, allocating a physically contiguous
- * chunk of memory as backing store. The GEM object is then added to the list
- * of object associated with the given file and a handle to it is returned.
+ * This function creates a CMA GEM object, allocating a chunk of memory as
+ * backing store. The GEM object is then added to the list of object associated
+ * with the given file and a handle to it is returned.
+ *
+ * The allocated memory will occupy a contiguous chunk of bus address space.
+ * See drm_gem_cma_create() for more details.
  *
  * Returns:
  * A struct drm_gem_cma_object * on success or an ERR_PTR()-encoded negative
@@ -209,7 +228,7 @@ drm_gem_cma_create_with_handle(struct drm_file *file_priv,
 void drm_gem_cma_free(struct drm_gem_cma_object *cma_obj)
 {
 	struct drm_gem_object *gem_obj = &cma_obj->base;
-	struct dma_buf_map map = DMA_BUF_MAP_INIT_VADDR(cma_obj->vaddr);
+	struct iosys_map map = IOSYS_MAP_INIT_VADDR(cma_obj->vaddr);
 
 	if (gem_obj->import_attach) {
 		if (cma_obj->vaddr)
@@ -480,9 +499,10 @@ EXPORT_SYMBOL_GPL(drm_gem_cma_prime_import_sg_table);
  * Returns:
  * 0 on success, or a negative error code otherwise.
  */
-int drm_gem_cma_vmap(struct drm_gem_cma_object *cma_obj, struct dma_buf_map *map)
+int drm_gem_cma_vmap(struct drm_gem_cma_object *cma_obj,
+		     struct iosys_map *map)
 {
-	dma_buf_map_set_vaddr(map, cma_obj->vaddr);
+	iosys_map_set_vaddr(map, cma_obj->vaddr);
 
 	return 0;
 }
@@ -558,7 +578,7 @@ drm_gem_cma_prime_import_sg_table_vmap(struct drm_device *dev,
 {
 	struct drm_gem_cma_object *cma_obj;
 	struct drm_gem_object *obj;
-	struct dma_buf_map map;
+	struct iosys_map map;
 	int ret;
 
 	ret = dma_buf_vmap(attach->dmabuf, &map);

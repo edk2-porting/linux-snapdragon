@@ -85,6 +85,7 @@
 #define NFP_FL_ACTION_OPCODE_SET_TCP		15
 #define NFP_FL_ACTION_OPCODE_PRE_LAG		16
 #define NFP_FL_ACTION_OPCODE_PRE_TUNNEL		17
+#define NFP_FL_ACTION_OPCODE_METER		24
 #define NFP_FL_ACTION_OPCODE_PUSH_GENEVE	26
 #define NFP_FL_ACTION_OPCODE_NUM		32
 
@@ -94,8 +95,6 @@
 
 #define NFP_FL_PUSH_VLAN_PRIO		GENMASK(15, 13)
 #define NFP_FL_PUSH_VLAN_VID		GENMASK(11, 0)
-
-#define IPV6_FLOW_LABEL_MASK		cpu_to_be32(0x000fffff)
 
 /* LAG ports */
 #define NFP_FL_LAG_OUT			0xC0DE0000
@@ -258,6 +257,12 @@ struct nfp_fl_set_mpls {
 	__be16 reserved;
 	__be32 lse_mask;
 	__be32 lse;
+};
+
+struct nfp_fl_meter {
+	struct nfp_fl_act_head head;
+	__be16 reserved;
+	__be32 meter_id;
 };
 
 /* Metadata with L2 (1W/4B)

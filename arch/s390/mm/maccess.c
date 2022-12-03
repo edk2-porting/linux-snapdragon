@@ -4,8 +4,6 @@
  *
  * Copyright IBM Corp. 2009, 2015
  *
- *   Author(s): Heiko Carstens <heiko.carstens@de.ibm.com>,
- *
  */
 
 #include <linux/uaccess.h>
@@ -14,6 +12,7 @@
 #include <linux/errno.h>
 #include <linux/gfp.h>
 #include <linux/cpu.h>
+#include <asm/asm-extable.h>
 #include <asm/ctl_reg.h>
 #include <asm/io.h>
 #include <asm/stacktrace.h>
@@ -123,7 +122,7 @@ static unsigned long __no_sanitize_address _memcpy_real(unsigned long dest,
 /*
  * Copy memory in real mode (kernel to kernel)
  */
-int memcpy_real(void *dest, void *src, size_t count)
+int memcpy_real(void *dest, unsigned long src, size_t count)
 {
 	unsigned long _dest  = (unsigned long)dest;
 	unsigned long _src   = (unsigned long)src;
@@ -173,43 +172,17 @@ void memcpy_absolute(void *dest, void *src, size_t count)
 }
 
 /*
- * Copy memory from kernel (real) to user (virtual)
- */
-int copy_to_user_real(void __user *dest, void *src, unsigned long count)
-{
-	int offs = 0, size, rc;
-	char *buf;
-
-	buf = (char *) __get_free_page(GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-	rc = -EFAULT;
-	while (offs < count) {
-		size = min(PAGE_SIZE, count - offs);
-		if (memcpy_real(buf, src + offs, size))
-			goto out;
-		if (copy_to_user(dest + offs, buf, size))
-			goto out;
-		offs += size;
-	}
-	rc = 0;
-out:
-	free_page((unsigned long) buf);
-	return rc;
-}
-
-/*
  * Check if physical address is within prefix or zero page
  */
-static int is_swapped(unsigned long addr)
+static int is_swapped(phys_addr_t addr)
 {
-	unsigned long lc;
+	phys_addr_t lc;
 	int cpu;
 
 	if (addr < sizeof(struct lowcore))
 		return 1;
 	for_each_online_cpu(cpu) {
-		lc = (unsigned long) lowcore_ptr[cpu];
+		lc = virt_to_phys(lowcore_ptr[cpu]);
 		if (addr > lc + sizeof(struct lowcore) - 1 || addr < lc)
 			continue;
 		return 1;
@@ -225,7 +198,8 @@ static int is_swapped(unsigned long addr)
  */
 void *xlate_dev_mem_ptr(phys_addr_t addr)
 {
-	void *bounce = (void *) addr;
+	void *ptr = phys_to_virt(addr);
+	void *bounce = ptr;
 	unsigned long size;
 
 	cpus_read_lock();
@@ -234,7 +208,7 @@ void *xlate_dev_mem_ptr(phys_addr_t addr)
 		size = PAGE_SIZE - (addr & ~PAGE_MASK);
 		bounce = (void *) __get_free_page(GFP_ATOMIC);
 		if (bounce)
-			memcpy_absolute(bounce, (void *) addr, size);
+			memcpy_absolute(bounce, ptr, size);
 	}
 	preempt_enable();
 	cpus_read_unlock();
@@ -244,8 +218,8 @@ void *xlate_dev_mem_ptr(phys_addr_t addr)
 /*
  * Free converted buffer for /dev/mem access (if necessary)
  */
-void unxlate_dev_mem_ptr(phys_addr_t addr, void *buf)
+void unxlate_dev_mem_ptr(phys_addr_t addr, void *ptr)
 {
-	if ((void *) addr != buf)
-		free_page((unsigned long) buf);
+	if (addr != virt_to_phys(ptr))
+		free_page((unsigned long)ptr);
 }

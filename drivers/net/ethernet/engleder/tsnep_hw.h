@@ -43,6 +43,10 @@
 #define ECM_RESET_CHANNEL 0x00000100
 #define ECM_RESET_TXRX 0x00010000
 
+/* counter */
+#define ECM_COUNTER_LOW 0x0028
+#define ECM_COUNTER_HIGH 0x002C
+
 /* control and status */
 #define ECM_STATUS 0x0080
 #define ECM_LINK_MODE_OFF 0x01000000
@@ -88,8 +92,7 @@
 
 /* tsnep register */
 #define TSNEP_INFO 0x0100
-#define TSNEP_INFO_RX_ASSIGN 0x00010000
-#define TSNEP_INFO_TX_TIME 0x00020000
+#define TSNEP_INFO_TX_TIME 0x00010000
 #define TSNEP_CONTROL 0x0108
 #define TSNEP_CONTROL_TX_RESET 0x00000001
 #define TSNEP_CONTROL_TX_ENABLE 0x00000002
@@ -190,7 +193,8 @@ struct tsnep_tx_desc {
 /* tsnep TX descriptor writeback */
 struct tsnep_tx_desc_wb {
 	__le32 properties;
-	__le32 reserved1[3];
+	__le32 reserved1;
+	__le64 counter;
 	__le64 timestamp;
 	__le32 dma_delay;
 	__le32 reserved2;
@@ -221,7 +225,7 @@ struct tsnep_rx_desc_wb {
 
 /* tsnep RX inline meta */
 struct tsnep_rx_inline {
-	__le64 reserved;
+	__le64 counter;
 	__le64 timestamp;
 };
 

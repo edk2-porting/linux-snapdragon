@@ -1081,11 +1081,12 @@ static int qdisc_graft(struct net_device *dev, struct Qdisc *parent,
 
 skip:
 		if (!ingress) {
-			notify_and_destroy(net, skb, n, classid,
-					   rtnl_dereference(dev->qdisc), new);
+			old = rtnl_dereference(dev->qdisc);
 			if (new && !new->ops->attach)
 				qdisc_refcount_inc(new);
 			rcu_assign_pointer(dev->qdisc, new ? : &noop_qdisc);
+
+			notify_and_destroy(net, skb, n, classid, old, new);
 
 			if (new && new->ops->attach)
 				new->ops->attach(new);
@@ -1292,7 +1293,7 @@ err_out5:
 	if (ops->destroy)
 		ops->destroy(sch);
 err_out3:
-	dev_put_track(dev, &sch->dev_tracker);
+	netdev_put(dev, &sch->dev_tracker);
 	qdisc_free(sch);
 err_out2:
 	module_put(ops->owner);

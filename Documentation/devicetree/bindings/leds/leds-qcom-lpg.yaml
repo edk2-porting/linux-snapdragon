@@ -17,11 +17,14 @@ description: >
 properties:
   compatible:
     enum:
+      - qcom,pm660l-lpg
       - qcom,pm8150b-lpg
       - qcom,pm8150l-lpg
+      - qcom,pm8350c-pwm
       - qcom,pm8916-pwm
       - qcom,pm8941-lpg
       - qcom,pm8994-lpg
+      - qcom,pmc8180c-lpg
       - qcom,pmi8994-lpg
       - qcom,pmi8998-lpg
 
@@ -39,18 +42,25 @@ properties:
     description:
       power-source used to drive the output, as defined in the datasheet.
       Should be specified if the TRILED block is present
+    enum: [0, 1, 3]
 
   qcom,dtest:
-    $ref: /schemas/types.yaml#/definitions/uint32-array
+    $ref: /schemas/types.yaml#/definitions/uint32-matrix
     description: >
       A list of integer pairs, where each pair represent the dtest line the
       particular channel should be connected to and the flags denoting how the
       value should be outputed, as defined in the datasheet. The number of
       pairs should be the same as the number of channels.
+    items:
+      items:
+        - description: dtest line to attach
+        - description: flags for the attachment
 
   multi-led:
     type: object
     $ref: leds-class-multicolor.yaml#
+    unevaluatedProperties: false
+
     properties:
       "#address-cells":
         const: 1
@@ -58,6 +68,7 @@ properties:
       "#size-cells":
         const: 0
 
+    patternProperties:
       "^led@[0-9a-f]$":
         type: object
         $ref: common.yaml#
@@ -82,7 +93,7 @@ examples:
   - |
     #include <dt-bindings/leds/common.h>
 
-    lpg {
+    led-controller {
       compatible = "qcom,pmi8994-lpg";
 
       #address-cells = <1>;
@@ -90,36 +101,44 @@ examples:
 
       qcom,power-source = <1>;
 
-      qcom,dtest = <0 0
-                    0 0
-                    0 0
-                    4 1>;
+      qcom,dtest = <0 0>,
+                   <0 0>,
+                   <0 0>,
+                   <4 1>;
 
       led@1 {
         reg = <1>;
-        label = "green:user1";
+        color = <LED_COLOR_ID_GREEN>;
+        function = LED_FUNCTION_INDICATOR;
+        function-enumerator = <1>;
       };
 
       led@2 {
         reg = <2>;
-        label = "green:user0";
+        color = <LED_COLOR_ID_GREEN>;
+        function = LED_FUNCTION_INDICATOR;
+        function-enumerator = <0>;
         default-state = "on";
       };
 
       led@3 {
         reg = <3>;
-        label = "green:user2";
+        color = <LED_COLOR_ID_GREEN>;
+        function = LED_FUNCTION_INDICATOR;
+        function-enumerator = <2>;
       };
 
       led@4 {
         reg = <4>;
-        label = "green:user3";
+        color = <LED_COLOR_ID_GREEN>;
+        function = LED_FUNCTION_INDICATOR;
+        function-enumerator = <3>;
       };
     };
   - |
     #include <dt-bindings/leds/common.h>
 
-    lpg {
+    led-controller {
       compatible = "qcom,pmi8994-lpg";
 
       #address-cells = <1>;
@@ -128,8 +147,8 @@ examples:
       qcom,power-source = <1>;
 
       multi-led {
-        color = <LED_COLOR_ID_MULTI>;
-        label = "rgb:notification";
+        color = <LED_COLOR_ID_RGB>;
+        function = LED_FUNCTION_STATUS;
 
         #address-cells = <1>;
         #size-cells = <0>;
@@ -151,7 +170,7 @@ examples:
       };
     };
   - |
-    lpg {
+    pwm-controller {
       compatible = "qcom,pm8916-pwm";
       #pwm-cells = <2>;
     };

@@ -7,7 +7,7 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: MSM Display Port Controller
 
 maintainers:
-  - Kuogee Hsieh <khsieh@codeaurora.org>
+  - Kuogee Hsieh <quic_khsieh@quicinc.com>
 
 description: |
   Device tree bindings for DisplayPort host controller for MSM targets
@@ -21,6 +21,7 @@ properties:
       - qcom,sc7280-edp
       - qcom,sc8180x-dp
       - qcom,sc8180x-edp
+      - qcom,sm8350-dp
 
   reg:
     items:
@@ -74,6 +75,9 @@ properties:
 
   "#sound-dai-cells":
     const: 0
+
+  vdda-0p9-supply: true
+  vdda-1p2-supply: true
 
   ports:
     $ref: /schemas/graph.yaml#/properties/ports
@@ -135,6 +139,9 @@ examples:
         #sound-dai-cells = <0>;
 
         power-domains = <&rpmhpd SC7180_CX>;
+
+        vdda-0p9-supply = <&vdda_usb_ss_dp_core>;
+        vdda-1p2-supply = <&vdda_usb_ss_dp_1p2>;
 
         ports {
             #address-cells = <1>;

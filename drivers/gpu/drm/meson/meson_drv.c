@@ -22,6 +22,7 @@
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_modeset_helper_vtables.h>
+#include <drm/drm_module.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 
@@ -114,8 +115,11 @@ static bool meson_vpu_has_available_connectors(struct device *dev)
 	for_each_endpoint_of_node(dev->of_node, ep) {
 		/* If the endpoint node exists, consider it enabled */
 		remote = of_graph_get_remote_port(ep);
-		if (remote)
+		if (remote) {
+			of_node_put(remote);
+			of_node_put(ep);
 			return true;
+		}
 	}
 
 	return false;
@@ -167,7 +171,7 @@ static const struct meson_drm_soc_attr meson_drm_soc_attrs[] = {
 		},
 		.attrs = (const struct soc_device_attribute []) {
 			{ .soc_id = "GXL (S805*)", },
-			{ /* sentinel */ },
+			{ /* sentinel */ }
 		}
 	},
 };
@@ -384,9 +388,13 @@ static void meson_drv_unbind(struct device *dev)
 	drm_dev_unregister(drm);
 	drm_kms_helper_poll_fini(drm);
 	drm_atomic_helper_shutdown(drm);
-	component_unbind_all(dev, drm);
 	free_irq(priv->vsync_irq, drm);
 	drm_dev_put(drm);
+
+	meson_encoder_hdmi_remove(priv);
+	meson_encoder_cvbs_remove(priv);
+
+	component_unbind_all(dev, drm);
 
 	if (priv->afbcd.ops)
 		priv->afbcd.ops->exit(priv);
@@ -422,14 +430,6 @@ static int __maybe_unused meson_drv_pm_resume(struct device *dev)
 		priv->afbcd.ops->init(priv);
 
 	return drm_mode_config_helper_resume(priv->drm);
-}
-
-static int compare_of(struct device *dev, void *data)
-{
-	DRM_DEBUG_DRIVER("Comparing of node %pOF with %pOF\n",
-			 dev->of_node, data);
-
-	return dev->of_node == data;
 }
 
 static void meson_drv_shutdown(struct platform_device *pdev)
@@ -474,7 +474,7 @@ static int meson_drv_probe(struct platform_device *pdev)
 		dev_dbg(&pdev->dev, "parent %pOF remote match add %pOF parent %s\n",
 			np, remote, dev_name(&pdev->dev));
 
-		component_match_add(&pdev->dev, &match, compare_of, remote);
+		component_match_add(&pdev->dev, &match, component_compare_of, remote);
 
 		of_node_put(remote);
 
@@ -496,6 +496,13 @@ static int meson_drv_probe(struct platform_device *pdev)
 	/* If no output endpoints were available, simply bail out */
 	return 0;
 };
+
+static int meson_drv_remove(struct platform_device *pdev)
+{
+	component_master_del(&pdev->dev, &meson_drv_master_ops);
+
+	return 0;
+}
 
 static struct meson_drm_match_data meson_drm_gxbb_data = {
 	.compat = VPU_COMPATIBLE_GXBB,
@@ -534,6 +541,7 @@ static const struct dev_pm_ops meson_drv_pm_ops = {
 
 static struct platform_driver meson_drm_platform_driver = {
 	.probe      = meson_drv_probe,
+	.remove     = meson_drv_remove,
 	.shutdown   = meson_drv_shutdown,
 	.driver     = {
 		.name	= "meson-drm",
@@ -542,7 +550,7 @@ static struct platform_driver meson_drm_platform_driver = {
 	},
 };
 
-module_platform_driver(meson_drm_platform_driver);
+drm_module_platform_driver(meson_drm_platform_driver);
 
 MODULE_AUTHOR("Jasper St. Pierre <jstpierre@mecheye.net>");
 MODULE_AUTHOR("Neil Armstrong <narmstrong@baylibre.com>");

@@ -109,7 +109,7 @@ void ftrace_likely_update(struct ftrace_likely_data *f, int val,
 #endif
 
 /* Unreachable code */
-#ifdef CONFIG_STACK_VALIDATION
+#ifdef CONFIG_OBJTOOL
 /*
  * These macros help objtool understand GCC code flow for unreachable code.
  * The __COUNTER__ based labels are a hack to make each instance of the macros
@@ -125,20 +125,13 @@ void ftrace_likely_update(struct ftrace_likely_data *f, int val,
 })
 #define annotate_unreachable() __annotate_unreachable(__COUNTER__)
 
-#define ASM_REACHABLE							\
-	"998:\n\t"							\
-	".pushsection .discard.reachable\n\t"				\
-	".long 998b - .\n\t"						\
-	".popsection\n\t"
-
 /* Annotate a C jump table to allow objtool to follow the code flow */
 #define __annotate_jump_table __section(".rodata..c_jump_table")
 
-#else
+#else /* !CONFIG_OBJTOOL */
 #define annotate_unreachable()
-# define ASM_REACHABLE
 #define __annotate_jump_table
-#endif
+#endif /* CONFIG_OBJTOOL */
 
 #ifndef unreachable
 # define unreachable() do {		\
@@ -245,6 +238,12 @@ static inline void *offset_to_ptr(const int *off)
 
 /* &a[0] degrades to a pointer: a different type from an array */
 #define __must_be_array(a)	BUILD_BUG_ON_ZERO(__same_type((a), &(a)[0]))
+
+/*
+ * Whether 'type' is a signed type or an unsigned type. Supports scalar types,
+ * bool and also pointer types.
+ */
+#define is_signed_type(type) (((type)(-1)) < (__force type)1)
 
 /*
  * This is needed in functions which generate the stack canary, see

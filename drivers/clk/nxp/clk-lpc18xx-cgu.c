@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Clk driver for NXP LPC18xx/LPC43xx Clock Generation Unit (CGU)
  *
  * Copyright (C) 2015 Joachim Eastwood <manabian@gmail.com>
- *
- * This file is licensed under the terms of the GNU General Public
- * License version 2. This program is licensed "as is" without any
- * warranty of any kind, whether express or implied.
  */
 
 #include <linux/clk-provider.h>
@@ -457,9 +454,8 @@ static unsigned long lpc18xx_pll1_recalc_rate(struct clk_hw *hw,
 	struct lpc18xx_pll *pll = to_lpc_pll(hw);
 	u16 msel, nsel, psel;
 	bool direct, fbsel;
-	u32 stat, ctrl;
+	u32 ctrl;
 
-	stat = readl(pll->reg + LPC18XX_CGU_PLL1_STAT);
 	ctrl = readl(pll->reg + LPC18XX_CGU_PLL1_CTRL);
 
 	direct = (ctrl & LPC18XX_PLL1_CTRL_DIRECT) ? true : false;
@@ -523,7 +519,7 @@ static struct lpc18xx_cgu_pll_clk lpc18xx_cgu_src_clk_plls[] = {
 	LPC1XX_CGU_CLK_PLL(PLL1,	pll1_src_ids, pll1_ops),
 };
 
-static void lpc18xx_fill_parent_names(const char **parent, u32 *id, int size)
+static void lpc18xx_fill_parent_names(const char **parent, const u32 *id, int size)
 {
 	int i;
 

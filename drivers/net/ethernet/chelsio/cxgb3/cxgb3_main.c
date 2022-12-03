@@ -1302,6 +1302,7 @@ static int cxgb_up(struct adapter *adap)
 		if (ret < 0) {
 			CH_ERR(adap, "failed to bind qsets, err %d\n", ret);
 			t3_intr_disable(adap);
+			quiesce_rx(adap);
 			free_irq_resources(adap);
 			err = ret;
 			goto out;
@@ -3349,6 +3350,7 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 	if (!adapter->registered_device_map) {
 		dev_err(&pdev->dev, "could not register any net devices\n");
+		err = -ENODEV;
 		goto out_free_dev;
 	}
 

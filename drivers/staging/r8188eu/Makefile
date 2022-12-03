@@ -5,12 +5,10 @@ r8188eu-y = \
 		hal/HalHWImg8188E_RF.o \
 		hal/HalPhyRf_8188e.o \
 		hal/HalPwrSeqCmd.o \
-		hal/Hal8188EPwrSeq.o \
 		hal/Hal8188ERateAdaptive.o \
 		hal/hal_intf.o \
 		hal/hal_com.o \
 		hal/odm.o \
-		hal/odm_debug.o \
 		hal/odm_HWConfig.o \
 		hal/odm_RegConfig8188E.o \
 		hal/odm_RTL8188E.o \
@@ -37,6 +35,7 @@ r8188eu-y = \
 		core/rtw_br_ext.o \
 		core/rtw_cmd.o \
 		core/rtw_efuse.o \
+		core/rtw_fw.o \
 		core/rtw_ieee80211.o \
 		core/rtw_ioctl_set.o \
 		core/rtw_iol.o \

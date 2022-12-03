@@ -811,7 +811,7 @@ static const struct of_device_id imx_ahci_of_match[] = {
 	{ .compatible = "fsl,imx6q-ahci", .data = (void *)AHCI_IMX6Q },
 	{ .compatible = "fsl,imx6qp-ahci", .data = (void *)AHCI_IMX6QP },
 	{ .compatible = "fsl,imx8qm-ahci", .data = (void *)AHCI_IMX8QM },
-	{},
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, imx_ahci_of_match);
 
@@ -1230,4 +1230,4 @@ module_platform_driver(imx_ahci_driver);
 MODULE_DESCRIPTION("Freescale i.MX AHCI SATA platform driver");
 MODULE_AUTHOR("Richard Zhu <Hong-Xing.Zhu@freescale.com>");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("ahci:imx");
+MODULE_ALIAS("platform:" DRV_NAME);

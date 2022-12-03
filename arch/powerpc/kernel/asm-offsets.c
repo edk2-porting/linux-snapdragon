@@ -94,7 +94,7 @@ int main(void)
 	OFFSET(TASK_CPU, task_struct, thread_info.cpu);
 #endif
 
-#ifdef CONFIG_LIVEPATCH
+#ifdef CONFIG_LIVEPATCH_64
 	OFFSET(TI_livepatch_sp, thread_info, livepatch_sp);
 #endif
 
@@ -379,7 +379,7 @@ int main(void)
 	OFFSET(VCPU_SPRG2, kvm_vcpu, arch.shregs.sprg2);
 	OFFSET(VCPU_SPRG3, kvm_vcpu, arch.shregs.sprg3);
 #endif
-#ifdef CONFIG_KVM_BOOK3S_HV_EXIT_TIMING
+#ifdef CONFIG_KVM_BOOK3S_HV_P8_TIMING
 	OFFSET(VCPU_TB_RMENTRY, kvm_vcpu, arch.rm_entry);
 	OFFSET(VCPU_TB_RMINTR, kvm_vcpu, arch.rm_intr);
 	OFFSET(VCPU_TB_RMEXIT, kvm_vcpu, arch.rm_exit);

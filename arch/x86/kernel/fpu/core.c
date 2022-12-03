@@ -14,6 +14,8 @@
 #include <asm/traps.h>
 #include <asm/irq_regs.h>
 
+#include <uapi/asm/kvm.h>
+
 #include <linux/hardirq.h>
 #include <linux/pkeys.h>
 #include <linux/vmalloc.h>
@@ -232,7 +234,20 @@ bool fpu_alloc_guest_fpstate(struct fpu_guest *gfpu)
 	gfpu->fpstate		= fpstate;
 	gfpu->xfeatures		= fpu_user_cfg.default_features;
 	gfpu->perm		= fpu_user_cfg.default_features;
-	gfpu->uabi_size		= fpu_user_cfg.default_size;
+
+	/*
+	 * KVM sets the FP+SSE bits in the XSAVE header when copying FPU state
+	 * to userspace, even when XSAVE is unsupported, so that restoring FPU
+	 * state on a different CPU that does support XSAVE can cleanly load
+	 * the incoming state using its natural XSAVE.  In other words, KVM's
+	 * uABI size may be larger than this host's default size.  Conversely,
+	 * the default size should never be larger than KVM's base uABI size;
+	 * all features that can expand the uABI size must be opt-in.
+	 */
+	gfpu->uabi_size		= sizeof(struct kvm_xsave);
+	if (WARN_ON_ONCE(fpu_user_cfg.default_size > gfpu->uabi_size))
+		gfpu->uabi_size = fpu_user_cfg.default_size;
+
 	fpu_init_guest_permissions(gfpu);
 
 	return true;
@@ -400,9 +415,6 @@ int fpu_copy_uabi_to_guest_fpstate(struct fpu_guest *gfpu, const void *buf,
 		xpkru = get_xsave_addr(&kstate->regs.xsave, XFEATURE_PKRU);
 		*vpkru = xpkru->pkru;
 	}
-
-	/* Ensure that XCOMP_BV is set up for XSAVES */
-	xstate_init_xcomp_bv(&kstate->regs.xsave, kstate->xfeatures);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(fpu_copy_uabi_to_guest_fpstate);
@@ -544,7 +556,7 @@ static inline void fpu_inherit_perms(struct fpu *dst_fpu)
 }
 
 /* Clone current's FPU state on fork */
-int fpu_clone(struct task_struct *dst, unsigned long clone_flags)
+int fpu_clone(struct task_struct *dst, unsigned long clone_flags, bool minimal)
 {
 	struct fpu *src_fpu = &current->thread.fpu;
 	struct fpu *dst_fpu = &dst->thread.fpu;
@@ -567,7 +579,7 @@ int fpu_clone(struct task_struct *dst, unsigned long clone_flags)
 	 * No FPU state inheritance for kernel threads and IO
 	 * worker threads.
 	 */
-	if (dst->flags & (PF_KTHREAD | PF_IO_WORKER)) {
+	if (minimal) {
 		/* Clear out the minimal state */
 		memcpy(&dst_fpu->fpstate->regs, &init_fpstate.regs,
 		       init_fpstate_copy_size());
@@ -593,9 +605,16 @@ int fpu_clone(struct task_struct *dst, unsigned long clone_flags)
 	if (test_thread_flag(TIF_NEED_FPU_LOAD))
 		fpregs_restore_userregs();
 	save_fpregs_to_fpstate(dst_fpu);
+	fpregs_unlock();
 	if (!(clone_flags & CLONE_THREAD))
 		fpu_inherit_perms(dst_fpu);
-	fpregs_unlock();
+
+	/*
+	 * Children never inherit PASID state.
+	 * Force it to have its init value:
+	 */
+	if (use_xsave())
+		dst_fpu->fpstate->regs.xsave.header.xfeatures &= ~XFEATURE_MASK_PASID;
 
 	trace_x86_fpu_copy_src(src_fpu);
 	trace_x86_fpu_copy_dst(dst_fpu);
@@ -831,4 +850,18 @@ int fpu__exception_code(struct fpu *fpu, int trap_nr)
 	 * we get a spurious trap, which is not an error.
 	 */
 	return 0;
+}
+
+/*
+ * Initialize register state that may prevent from entering low-power idle.
+ * This function will be invoked from the cpuidle driver only when needed.
+ */
+void fpu_idle_fpregs(void)
+{
+	/* Note: AMX_TILE being enabled implies XGETBV1 support */
+	if (cpu_feature_enabled(X86_FEATURE_AMX_TILE) &&
+	    (xfeatures_in_use() & XFEATURE_MASK_XTILE)) {
+		tile_release();
+		fpregs_deactivate(&current->thread.fpu);
+	}
 }

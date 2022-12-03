@@ -655,7 +655,7 @@ static void list_version_get_needed(struct target_type *tt, void *needed_param)
     size_t *needed = needed_param;
 
     *needed += sizeof(struct dm_target_versions);
-    *needed += strlen(tt->name);
+    *needed += strlen(tt->name) + 1;
     *needed += ALIGN_MASK;
 }
 
@@ -720,7 +720,7 @@ static int __list_versions(struct dm_ioctl *param, size_t param_size, const char
 	iter_info.old_vers = NULL;
 	iter_info.vers = vers;
 	iter_info.flags = 0;
-	iter_info.end = (char *)vers+len;
+	iter_info.end = (char *)vers + needed;
 
 	/*
 	 * Now loop through filling out the names & versions.
@@ -832,7 +832,7 @@ static void __dev_status(struct mapped_device *md, struct dm_ioctl *param)
 		if (!(param->flags & DM_QUERY_INACTIVE_TABLE_FLAG)) {
 			if (get_disk_ro(disk))
 				param->flags |= DM_READONLY_FLAG;
-			param->target_count = dm_table_get_num_targets(table);
+			param->target_count = table->num_targets;
 		}
 
 		param->flags |= DM_ACTIVE_PRESENT_FLAG;
@@ -845,7 +845,7 @@ static void __dev_status(struct mapped_device *md, struct dm_ioctl *param)
 		if (table) {
 			if (!(dm_table_get_mode(table) & FMODE_WRITE))
 				param->flags |= DM_READONLY_FLAG;
-			param->target_count = dm_table_get_num_targets(table);
+			param->target_count = table->num_targets;
 		}
 		dm_put_live_table(md, srcu_idx);
 	}
@@ -891,15 +891,21 @@ static struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
 	struct hash_cell *hc = NULL;
 
 	if (*param->uuid) {
-		if (*param->name || param->dev)
+		if (*param->name || param->dev) {
+			DMERR("Invalid ioctl structure: uuid %s, name %s, dev %llx",
+			      param->uuid, param->name, (unsigned long long)param->dev);
 			return NULL;
+		}
 
 		hc = __get_uuid_cell(param->uuid);
 		if (!hc)
 			return NULL;
 	} else if (*param->name) {
-		if (param->dev)
+		if (param->dev) {
+			DMERR("Invalid ioctl structure: name %s, dev %llx",
+			      param->name, (unsigned long long)param->dev);
 			return NULL;
+		}
 
 		hc = __get_name_cell(param->name);
 		if (!hc)
@@ -1242,7 +1248,7 @@ static void retrieve_status(struct dm_table *table,
 		type = STATUSTYPE_INFO;
 
 	/* Get all the target info */
-	num_targets = dm_table_get_num_targets(table);
+	num_targets = table->num_targets;
 	for (i = 0; i < num_targets; i++) {
 		struct dm_target *ti = dm_table_get_target(table, i);
 		size_t l;
@@ -1851,8 +1857,11 @@ static int copy_params(struct dm_ioctl __user *user, struct dm_ioctl *param_kern
 	if (copy_from_user(param_kernel, user, minimum_data_size))
 		return -EFAULT;
 
-	if (param_kernel->data_size < minimum_data_size)
+	if (param_kernel->data_size < minimum_data_size) {
+		DMERR("Invalid data size in the ioctl structure: %u",
+		      param_kernel->data_size);
 		return -EINVAL;
+	}
 
 	secure_data = param_kernel->flags & DM_SECURE_DATA_FLAG;
 

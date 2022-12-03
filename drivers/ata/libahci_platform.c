@@ -59,7 +59,7 @@ int ahci_platform_enable_phys(struct ahci_host_priv *hpriv)
 		}
 
 		rc = phy_power_on(hpriv->phys[i]);
-		if (rc && !(rc == -EOPNOTSUPP && (hpriv->flags & AHCI_HFLAG_IGN_NOTSUPP_POWER_ON))) {
+		if (rc) {
 			phy_exit(hpriv->phys[i]);
 			goto disable_phys;
 		}
@@ -451,14 +451,24 @@ struct ahci_host_priv *ahci_platform_get_resources(struct platform_device *pdev,
 		}
 	}
 
-	hpriv->nports = child_nodes = of_get_child_count(dev->of_node);
+	/*
+	 * Too many sub-nodes most likely means having something wrong with
+	 * the firmware.
+	 */
+	child_nodes = of_get_child_count(dev->of_node);
+	if (child_nodes > AHCI_MAX_PORTS) {
+		rc = -EINVAL;
+		goto err_out;
+	}
 
 	/*
 	 * If no sub-node was found, we still need to set nports to
 	 * one in order to be able to use the
 	 * ahci_platform_[en|dis]able_[phys|regulators] functions.
 	 */
-	if (!child_nodes)
+	if (child_nodes)
+		hpriv->nports = child_nodes;
+	else
 		hpriv->nports = 1;
 
 	hpriv->phys = devm_kcalloc(dev, hpriv->nports, sizeof(*hpriv->phys), GFP_KERNEL);
@@ -733,7 +743,8 @@ int ahci_platform_suspend_host(struct device *dev)
 	if (hpriv->flags & AHCI_HFLAG_SUSPEND_PHYS)
 		ahci_platform_disable_phys(hpriv);
 
-	return ata_host_suspend(host, PMSG_SUSPEND);
+	ata_host_suspend(host, PMSG_SUSPEND);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(ahci_platform_suspend_host);
 

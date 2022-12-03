@@ -1760,7 +1760,7 @@ megasas_build_and_issue_cmd(struct megasas_instance *instance,
 		goto out_return_cmd;
 
 	cmd->scmd = scmd;
-	scmd->SCp.ptr = (char *)cmd;
+	megasas_priv(scmd)->cmd_priv = cmd;
 
 	/*
 	 * Issue the command to the FW
@@ -2999,11 +2999,10 @@ megasas_dump_reg_set(void __iomem *reg_set)
 void
 megasas_dump_fusion_io(struct scsi_cmnd *scmd)
 {
-	struct megasas_cmd_fusion *cmd;
+	struct megasas_cmd_fusion *cmd = megasas_priv(scmd)->cmd_priv;
 	union MEGASAS_REQUEST_DESCRIPTOR_UNION *req_desc;
 	struct megasas_instance *instance;
 
-	cmd = (struct megasas_cmd_fusion *)scmd->SCp.ptr;
 	instance = (struct megasas_instance *)scmd->device->host->hostdata;
 
 	scmd_printk(KERN_INFO, scmd,
@@ -3195,6 +3194,9 @@ static int megasas_map_queues(struct Scsi_Host *shost)
 	blk_mq_pci_map_queues(map, instance->pdev, offset);
 	qoff += map->nr_queues;
 	offset += map->nr_queues;
+
+	/* we never use READ queue, so can't cheat blk-mq */
+	shost->tag_set.map[HCTX_TYPE_READ].nr_queues = 0;
 
 	/* Setup Poll hctx */
 	map = &shost->tag_set.map[HCTX_TYPE_POLL];
@@ -3525,6 +3527,7 @@ static struct scsi_host_template megasas_template = {
 	.mq_poll = megasas_blk_mq_poll,
 	.change_queue_depth = scsi_change_queue_depth,
 	.max_segment_size = 0xffffffff,
+	.cmd_size = sizeof(struct megasas_cmd_priv),
 };
 
 /**
@@ -3608,7 +3611,7 @@ megasas_complete_cmd(struct megasas_instance *instance, struct megasas_cmd *cmd,
 	cmd->retry_for_fw_reset = 0;
 
 	if (cmd->scmd)
-		cmd->scmd->SCp.ptr = NULL;
+		megasas_priv(cmd->scmd)->cmd_priv = NULL;
 
 	switch (hdr->cmd) {
 	case MFI_CMD_INVALID:
@@ -3947,9 +3950,9 @@ process_fw_state_change_wq(struct work_struct *work)
 	u32 wait;
 	unsigned long flags;
 
-    if (atomic_read(&instance->adprecovery) != MEGASAS_ADPRESET_SM_INFAULT) {
+	if (atomic_read(&instance->adprecovery) != MEGASAS_ADPRESET_SM_INFAULT) {
 		dev_notice(&instance->pdev->dev, "error, recovery st %x\n",
-				atomic_read(&instance->adprecovery));
+			   atomic_read(&instance->adprecovery));
 		return ;
 	}
 
@@ -4472,8 +4475,6 @@ int megasas_alloc_cmds(struct megasas_instance *instance)
 		dev_printk(KERN_DEBUG, &instance->pdev->dev, "out of memory\n");
 		return -ENOMEM;
 	}
-
-	memset(instance->cmd_list, 0, sizeof(struct megasas_cmd *) *max_cmd);
 
 	for (i = 0; i < max_cmd; i++) {
 		instance->cmd_list[i] = kmalloc(sizeof(struct megasas_cmd),
@@ -7152,22 +7153,18 @@ static int megasas_alloc_ctrl_mem(struct megasas_instance *instance)
 	switch (instance->adapter_type) {
 	case MFI_SERIES:
 		if (megasas_alloc_mfi_ctrl_mem(instance))
-			goto fail;
+			return -ENOMEM;
 		break;
 	case AERO_SERIES:
 	case VENTURA_SERIES:
 	case THUNDERBOLT_SERIES:
 	case INVADER_SERIES:
 		if (megasas_alloc_fusion_context(instance))
-			goto fail;
+			return -ENOMEM;
 		break;
 	}
 
 	return 0;
- fail:
-	kfree(instance->reply_map);
-	instance->reply_map = NULL;
-	return -ENOMEM;
 }
 
 /*

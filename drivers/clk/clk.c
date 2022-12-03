@@ -37,7 +37,7 @@ static HLIST_HEAD(clk_root_list);
 static HLIST_HEAD(clk_orphan_list);
 static LIST_HEAD(clk_notifier_list);
 
-static struct hlist_head *all_lists[] = {
+static const struct hlist_head *all_lists[] = {
 	&clk_root_list,
 	&clk_orphan_list,
 	NULL,
@@ -108,17 +108,10 @@ struct clk {
 /***           runtime pm          ***/
 static int clk_pm_runtime_get(struct clk_core *core)
 {
-	int ret;
-
 	if (!core->rpm_enabled)
 		return 0;
 
-	ret = pm_runtime_get_sync(core->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(core->dev);
-		return ret;
-	}
-	return 0;
+	return pm_runtime_resume_and_get(core->dev);
 }
 
 static void clk_pm_runtime_put(struct clk_core *core)
@@ -847,10 +840,9 @@ static void clk_core_unprepare(struct clk_core *core)
 	if (core->ops->unprepare)
 		core->ops->unprepare(core->hw);
 
-	clk_pm_runtime_put(core);
-
 	trace_clk_unprepare_complete(core);
 	clk_core_unprepare(core->parent);
+	clk_pm_runtime_put(core);
 }
 
 static void clk_core_unprepare_lock(struct clk_core *core)
@@ -1347,6 +1339,8 @@ static int clk_core_determine_round_nolock(struct clk_core *core,
 
 	if (!core)
 		return 0;
+
+	req->rate = clamp(req->rate, req->min_rate, req->max_rate);
 
 	/*
 	 * At this point, core protection will be disabled
@@ -2371,32 +2365,29 @@ int clk_set_rate_range(struct clk *clk, unsigned long min, unsigned long max)
 		goto out;
 	}
 
-	rate = clk_core_get_rate_nolock(clk->core);
-	if (rate < min || rate > max) {
-		/*
-		 * FIXME:
-		 * We are in bit of trouble here, current rate is outside the
-		 * the requested range. We are going try to request appropriate
-		 * range boundary but there is a catch. It may fail for the
-		 * usual reason (clock broken, clock protected, etc) but also
-		 * because:
-		 * - round_rate() was not favorable and fell on the wrong
-		 *   side of the boundary
-		 * - the determine_rate() callback does not really check for
-		 *   this corner case when determining the rate
-		 */
-
-		if (rate < min)
-			rate = min;
-		else
-			rate = max;
-
-		ret = clk_core_set_rate_nolock(clk->core, rate);
-		if (ret) {
-			/* rollback the changes */
-			clk->min_rate = old_min;
-			clk->max_rate = old_max;
-		}
+	/*
+	 * Since the boundaries have been changed, let's give the
+	 * opportunity to the provider to adjust the clock rate based on
+	 * the new boundaries.
+	 *
+	 * We also need to handle the case where the clock is currently
+	 * outside of the boundaries. Clamping the last requested rate
+	 * to the current minimum and maximum will also handle this.
+	 *
+	 * FIXME:
+	 * There is a catch. It may fail for the usual reason (clock
+	 * broken, clock protected, etc) but also because:
+	 * - round_rate() was not favorable and fell on the wrong
+	 *   side of the boundary
+	 * - the determine_rate() callback does not really check for
+	 *   this corner case when determining the rate
+	 */
+	rate = clamp(clk->core->req_rate, min, max);
+	ret = clk_core_set_rate_nolock(clk->core, rate);
+	if (ret) {
+		/* rollback the changes */
+		clk->min_rate = old_min;
+		clk->max_rate = old_max;
 	}
 
 out:
@@ -4117,7 +4108,7 @@ static const struct clk_ops clk_nodrv_ops = {
 };
 
 static void clk_core_evict_parent_cache_subtree(struct clk_core *root,
-						struct clk_core *target)
+						const struct clk_core *target)
 {
 	int i;
 	struct clk_core *child;
@@ -4133,7 +4124,7 @@ static void clk_core_evict_parent_cache_subtree(struct clk_core *root,
 /* Remove this clk from all parent caches */
 static void clk_core_evict_parent_cache(struct clk_core *core)
 {
-	struct hlist_head **lists;
+	const struct hlist_head **lists;
 	struct clk_core *root;
 
 	lockdep_assert_held(&prepare_lock);
@@ -4286,54 +4277,6 @@ int devm_clk_hw_register(struct device *dev, struct clk_hw *hw)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(devm_clk_hw_register);
-
-static int devm_clk_match(struct device *dev, void *res, void *data)
-{
-	struct clk *c = res;
-	if (WARN_ON(!c))
-		return 0;
-	return c == data;
-}
-
-static int devm_clk_hw_match(struct device *dev, void *res, void *data)
-{
-	struct clk_hw *hw = res;
-
-	if (WARN_ON(!hw))
-		return 0;
-	return hw == data;
-}
-
-/**
- * devm_clk_unregister - resource managed clk_unregister()
- * @dev: device that is unregistering the clock data
- * @clk: clock to unregister
- *
- * Deallocate a clock allocated with devm_clk_register(). Normally
- * this function will not need to be called and the resource management
- * code will ensure that the resource is freed.
- */
-void devm_clk_unregister(struct device *dev, struct clk *clk)
-{
-	WARN_ON(devres_release(dev, devm_clk_unregister_cb, devm_clk_match, clk));
-}
-EXPORT_SYMBOL_GPL(devm_clk_unregister);
-
-/**
- * devm_clk_hw_unregister - resource managed clk_hw_unregister()
- * @dev: device that is unregistering the hardware-specific clock data
- * @hw: link to hardware-specific clock data
- *
- * Unregister a clk_hw registered with devm_clk_hw_register(). Normally
- * this function will not need to be called and the resource management
- * code will ensure that the resource is freed.
- */
-void devm_clk_hw_unregister(struct device *dev, struct clk_hw *hw)
-{
-	WARN_ON(devres_release(dev, devm_clk_hw_unregister_cb, devm_clk_hw_match,
-				hw));
-}
-EXPORT_SYMBOL_GPL(devm_clk_hw_unregister);
 
 static void devm_clk_release(struct device *dev, void *res)
 {

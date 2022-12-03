@@ -148,6 +148,7 @@ static void otx2_snd_pkt_handler(struct otx2_nic *pfvf,
 	if (skb_shinfo(skb)->tx_flags & SKBTX_IN_PROGRESS) {
 		timestamp = ((u64 *)sq->timestamps->base)[snd_comp->sqe_id];
 		if (timestamp != 1) {
+			timestamp = pfvf->ptp->convert_tx_ptp_tstmp(timestamp);
 			err = otx2_ptp_tstamp2time(pfvf, timestamp, &tsns);
 			if (!err) {
 				memset(&ts, 0, sizeof(ts));
@@ -167,14 +168,15 @@ static void otx2_snd_pkt_handler(struct otx2_nic *pfvf,
 static void otx2_set_rxtstamp(struct otx2_nic *pfvf,
 			      struct sk_buff *skb, void *data)
 {
-	u64 tsns;
+	u64 timestamp, tsns;
 	int err;
 
 	if (!(pfvf->flags & OTX2_FLAG_RX_TSTAMP_ENABLED))
 		return;
 
+	timestamp = pfvf->ptp->convert_rx_ptp_tstmp(*(u64 *)data);
 	/* The first 8 bytes is the timestamp */
-	err = otx2_ptp_tstamp2time(pfvf, be64_to_cpu(*(__be64 *)data), &tsns);
+	err = otx2_ptp_tstamp2time(pfvf, timestamp, &tsns);
 	if (err)
 		return;
 
@@ -433,6 +435,7 @@ static int otx2_tx_napi_handler(struct otx2_nic *pfvf,
 				struct otx2_cq_queue *cq, int budget)
 {
 	int tx_pkts = 0, tx_bytes = 0, qidx;
+	struct otx2_snd_queue *sq;
 	struct nix_cqe_tx_s *cqe;
 	int processed_cqe = 0;
 
@@ -443,6 +446,9 @@ static int otx2_tx_napi_handler(struct otx2_nic *pfvf,
 		return 0;
 
 process_cqe:
+	qidx = cq->cq_idx - pfvf->hw.rx_queues;
+	sq = &pfvf->qset.sq[qidx];
+
 	while (likely(processed_cqe < budget) && cq->pend_cqe) {
 		cqe = (struct nix_cqe_tx_s *)otx2_get_next_cqe(cq);
 		if (unlikely(!cqe)) {
@@ -450,18 +456,20 @@ process_cqe:
 				return 0;
 			break;
 		}
+
 		if (cq->cq_type == CQ_XDP) {
-			qidx = cq->cq_idx - pfvf->hw.rx_queues;
-			otx2_xdp_snd_pkt_handler(pfvf, &pfvf->qset.sq[qidx],
-						 cqe);
+			otx2_xdp_snd_pkt_handler(pfvf, sq, cqe);
 		} else {
-			otx2_snd_pkt_handler(pfvf, cq,
-					     &pfvf->qset.sq[cq->cint_idx],
-					     cqe, budget, &tx_pkts, &tx_bytes);
+			otx2_snd_pkt_handler(pfvf, cq, sq, cqe, budget,
+					     &tx_pkts, &tx_bytes);
 		}
+
 		cqe->hdr.cqe_type = NIX_XQE_TYPE_INVALID;
 		processed_cqe++;
 		cq->pend_cqe--;
+
+		sq->cons_head++;
+		sq->cons_head &= (sq->sqe_cnt - 1);
 	}
 
 	/* Free CQEs to HW */
@@ -480,6 +488,18 @@ process_cqe:
 			netif_tx_wake_queue(txq);
 	}
 	return 0;
+}
+
+static void otx2_adjust_adaptive_coalese(struct otx2_nic *pfvf, struct otx2_cq_poll *cq_poll)
+{
+	struct dim_sample dim_sample;
+	u64 rx_frames, rx_bytes;
+
+	rx_frames = OTX2_GET_RX_STATS(RX_BCAST) + OTX2_GET_RX_STATS(RX_MCAST) +
+		OTX2_GET_RX_STATS(RX_UCAST);
+	rx_bytes = OTX2_GET_RX_STATS(RX_OCTS);
+	dim_update_sample(pfvf->napi_events, rx_frames, rx_bytes, &dim_sample);
+	net_dim(&cq_poll->dim, dim_sample);
 }
 
 int otx2_napi_handler(struct napi_struct *napi, int budget)
@@ -518,6 +538,17 @@ int otx2_napi_handler(struct napi_struct *napi, int budget)
 		/* If interface is going down, don't re-enable IRQ */
 		if (pfvf->flags & OTX2_FLAG_INTF_DOWN)
 			return workdone;
+
+		/* Check for adaptive interrupt coalesce */
+		if (workdone != 0 &&
+		    ((pfvf->flags & OTX2_FLAG_ADPTV_INT_COAL_ENABLED) ==
+		     OTX2_FLAG_ADPTV_INT_COAL_ENABLED)) {
+			/* Adjust irq coalese using net_dim */
+			otx2_adjust_adaptive_coalese(pfvf, cq_poll);
+			/* Update irq coalescing */
+			for (i = 0; i < pfvf->hw.cint_cnt; i++)
+				otx2_config_irq_coalescing(pfvf, i);
+		}
 
 		/* Re-enable interrupts */
 		otx2_write64(pfvf, NIX_LF_CINTX_ENA_W1S(cq_poll->cint_idx),
@@ -599,7 +630,7 @@ static void otx2_sqe_add_ext(struct otx2_nic *pfvf, struct otx2_snd_queue *sq,
 	ext->subdc = NIX_SUBDC_EXT;
 	if (skb_shinfo(skb)->gso_size) {
 		ext->lso = 1;
-		ext->lso_sb = skb_transport_offset(skb) + tcp_hdrlen(skb);
+		ext->lso_sb = skb_tcp_all_headers(skb);
 		ext->lso_mps = skb_shinfo(skb)->gso_size;
 
 		/* Only TSOv4 and TSOv6 GSO offloads are supported */
@@ -906,7 +937,7 @@ static bool is_hw_tso_supported(struct otx2_nic *pfvf,
 	 * be correctly modified, hence don't offload such TSO segments.
 	 */
 
-	payload_len = skb->len - (skb_transport_offset(skb) + tcp_hdrlen(skb));
+	payload_len = skb->len - skb_tcp_all_headers(skb);
 	last_seg_size = payload_len % skb_shinfo(skb)->gso_size;
 	if (last_seg_size && last_seg_size < 16)
 		return false;
@@ -947,17 +978,17 @@ bool otx2_sq_append_skb(struct net_device *netdev, struct otx2_snd_queue *sq,
 {
 	struct netdev_queue *txq = netdev_get_tx_queue(netdev, qidx);
 	struct otx2_nic *pfvf = netdev_priv(netdev);
-	int offset, num_segs, free_sqe;
+	int offset, num_segs, free_desc;
 	struct nix_sqe_hdr_s *sqe_hdr;
 
-	/* Check if there is room for new SQE.
-	 * 'Num of SQBs freed to SQ's pool - SQ's Aura count'
-	 * will give free SQE count.
+	/* Check if there is enough room between producer
+	 * and consumer index.
 	 */
-	free_sqe = (sq->num_sqbs - *sq->aura_fc_addr) * sq->sqe_per_sqb;
+	free_desc = (sq->cons_head - sq->head - 1 + sq->sqe_cnt) & (sq->sqe_cnt - 1);
+	if (free_desc < sq->sqe_thresh)
+		return false;
 
-	if (free_sqe < sq->sqe_thresh ||
-	    free_sqe < otx2_get_sqe_count(pfvf, skb))
+	if (free_desc < otx2_get_sqe_count(pfvf, skb))
 		return false;
 
 	num_segs = skb_shinfo(skb)->nr_frags + 1;

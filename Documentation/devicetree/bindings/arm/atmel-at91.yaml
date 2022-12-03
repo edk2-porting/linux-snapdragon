@@ -163,15 +163,26 @@ properties:
           - const: microchip,sama7g5
           - const: microchip,sama7
 
-      - description: Microchip LAN9662 PCB8291 Evaluation Board.
+      - description: Microchip LAN9662 Evaluation Boards.
         items:
-          - const: microchip,lan9662-pcb8291
+          - enum:
+              - microchip,lan9662-pcb8291
+              - microchip,lan9662-pcb8309
           - const: microchip,lan9662
           - const: microchip,lan966
 
       - description: Microchip LAN9668 PCB8290 Evaluation Board.
         items:
           - const: microchip,lan9668-pcb8290
+          - const: microchip,lan9668
+          - const: microchip,lan966
+
+      - description: Kontron KSwitch D10 MMT series
+        items:
+          - enum:
+              - kontron,kswitch-d10-mmt-8g
+              - kontron,kswitch-d10-mmt-6g-2gs
+          - const: kontron,s1921
           - const: microchip,lan9668
           - const: microchip,lan966
 

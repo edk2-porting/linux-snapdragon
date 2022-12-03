@@ -48,11 +48,11 @@
 			status = "okay";
 		};
 
-		vdd_1v5: fixed-regulator-vdd_1v5@1 {
+		vdd_1v15: fixed-regulator-vdd_1v15@1 {
 			compatible = "regulator-fixed";
-			regulator-name = "VDD_1V5";
-			regulator-min-microvolt = <1500000>;
-			regulator-max-microvolt = <1500000>;
+			regulator-name = "VDD_1V15";
+			regulator-min-microvolt = <1150000>;
+			regulator-max-microvolt = <1150000>;
 			regulator-always-on;
 			status = "okay";
 		};
@@ -76,16 +76,15 @@
 		};
 	};
 
-	gpio_keys {
+	gpio-keys {
 		compatible = "gpio-keys";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_key_gpio_default>;
-		status = "okay";
 
-		sw1 {
+		button-1 {
 			label = "SW1";
 			gpios = <&pioD 18 GPIO_ACTIVE_LOW>;
-			linux,code=<KEY_PROG1>;
+			linux,code = <KEY_PROG1>;
 			wakeup-source;
 		};
 	};
@@ -233,10 +232,9 @@
 		status = "okay";
 
 		eeprom@53 {
-			compatible = "atmel,24c32";
+			compatible = "atmel,24c02";
 			reg = <0x53>;
 			pagesize = <16>;
-			size = <128>;
 			status = "okay";
 		};
 	};

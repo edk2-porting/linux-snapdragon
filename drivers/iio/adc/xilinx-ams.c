@@ -12,6 +12,7 @@
 #include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/devm-helpers.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
@@ -1355,11 +1356,6 @@ static void ams_clk_disable_unprepare(void *data)
 	clk_disable_unprepare(data);
 }
 
-static void ams_cancel_delayed_work(void *data)
-{
-	cancel_delayed_work(data);
-}
-
 static int ams_probe(struct platform_device *pdev)
 {
 	struct iio_dev *indio_dev;
@@ -1396,9 +1392,8 @@ static int ams_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	INIT_DELAYED_WORK(&ams->ams_unmask_work, ams_unmask_worker);
-	ret = devm_add_action_or_reset(&pdev->dev, ams_cancel_delayed_work,
-				       &ams->ams_unmask_work);
+	ret = devm_delayed_work_autocancel(&pdev->dev, &ams->ams_unmask_work,
+					   ams_unmask_worker);
 	if (ret < 0)
 		return ret;
 
@@ -1414,7 +1409,7 @@ static int ams_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
-		return ret;
+		return irq;
 
 	ret = devm_request_irq(&pdev->dev, irq, &ams_irq, 0, "ams-irq",
 			       indio_dev);
@@ -1426,7 +1421,7 @@ static int ams_probe(struct platform_device *pdev)
 	return devm_iio_device_register(&pdev->dev, indio_dev);
 }
 
-static int __maybe_unused ams_suspend(struct device *dev)
+static int ams_suspend(struct device *dev)
 {
 	struct ams *ams = iio_priv(dev_get_drvdata(dev));
 
@@ -1435,20 +1430,20 @@ static int __maybe_unused ams_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused ams_resume(struct device *dev)
+static int ams_resume(struct device *dev)
 {
 	struct ams *ams = iio_priv(dev_get_drvdata(dev));
 
 	return clk_prepare_enable(ams->clk);
 }
 
-static SIMPLE_DEV_PM_OPS(ams_pm_ops, ams_suspend, ams_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(ams_pm_ops, ams_suspend, ams_resume);
 
 static struct platform_driver ams_driver = {
 	.probe = ams_probe,
 	.driver = {
 		.name = "xilinx-ams",
-		.pm = &ams_pm_ops,
+		.pm = pm_sleep_ptr(&ams_pm_ops),
 		.of_match_table = ams_of_match_table,
 	},
 };

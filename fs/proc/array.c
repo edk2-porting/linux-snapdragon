@@ -69,7 +69,6 @@
 #include <linux/sched/cputime.h>
 #include <linux/proc_fs.h>
 #include <linux/ioport.h>
-#include <linux/uaccess.h>
 #include <linux/io.h>
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
@@ -88,7 +87,6 @@
 #include <linux/pid_namespace.h>
 #include <linux/prctl.h>
 #include <linux/ptrace.h>
-#include <linux/tracehook.h>
 #include <linux/string_helpers.h>
 #include <linux/user_namespace.h>
 #include <linux/fs_struct.h>
@@ -101,6 +99,10 @@ void proc_task_name(struct seq_file *m, struct task_struct *p, bool escape)
 {
 	char tcomm[64];
 
+	/*
+	 * Test before PF_KTHREAD because all workqueue worker threads are
+	 * kernel threads.
+	 */
 	if (p->flags & PF_WQ_WORKER)
 		wq_worker_comm(tcomm, sizeof(tcomm), p);
 	else if (p->flags & PF_KTHREAD)

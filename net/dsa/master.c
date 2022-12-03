@@ -204,8 +204,7 @@ static int dsa_master_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		 * switch in the tree that is PTP capable.
 		 */
 		list_for_each_entry(dp, &dst->ports, list)
-			if (dp->ds->ops->port_hwtstamp_get ||
-			    dp->ds->ops->port_hwtstamp_set)
+			if (dsa_port_supports_hwtstamp(dp, ifr))
 				return -EBUSY;
 		break;
 	}
@@ -335,8 +334,6 @@ static const struct attribute_group dsa_group = {
 	.attrs	= dsa_slave_attrs,
 };
 
-static struct lock_class_key dsa_master_addr_list_lock_key;
-
 static void dsa_master_reset_mtu(struct net_device *dev)
 {
 	int err;
@@ -380,8 +377,6 @@ int dsa_master_setup(struct net_device *dev, struct dsa_port *cpu_dp)
 	wmb();
 
 	dev->dsa_ptr = cpu_dp;
-	lockdep_set_class(&dev->addr_list_lock,
-			  &dsa_master_addr_list_lock_key);
 
 	dsa_master_set_promiscuity(dev, 1);
 

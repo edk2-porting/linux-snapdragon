@@ -6,7 +6,6 @@
  *
  * Copyright(C) 2007, Red Hat, Inc., Ingo Molnar
  */
-#include "sched.h"
 
 /*
  * This allows printing both to /proc/sched_debug and
@@ -417,7 +416,7 @@ void update_sched_domain_debugfs(void)
 		char buf[32];
 
 		snprintf(buf, sizeof(buf), "cpu%d", cpu);
-		debugfs_remove(debugfs_lookup(buf, sd_dentry));
+		debugfs_lookup_and_remove(buf, sd_dentry);
 		d_cpu = debugfs_create_dir(buf, sd_dentry);
 
 		i = 0;

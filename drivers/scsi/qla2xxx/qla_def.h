@@ -78,7 +78,7 @@ typedef union {
 #include "qla_nvme.h"
 #define QLA2XXX_DRIVER_NAME	"qla2xxx"
 #define QLA2XXX_APIDEV		"ql2xapidev"
-#define QLA2XXX_MANUFACTURER	"QLogic Corporation"
+#define QLA2XXX_MANUFACTURER	"Marvell Semiconductor, Inc."
 
 /*
  * We have MAILBOX_REGISTER_COUNT sized arrays in a few places,
@@ -1173,6 +1173,12 @@ static inline bool qla2xxx_is_valid_mbs(unsigned int mbs)
 
 /* ISP mailbox loopback echo diagnostic error code */
 #define MBS_LB_RESET	0x17
+
+/* AEN mailbox Port Diagnostics test */
+#define AEN_START_DIAG_TEST		0x0	/* start the diagnostics */
+#define AEN_DONE_DIAG_TEST_WITH_NOERR	0x1	/* Done with no errors */
+#define AEN_DONE_DIAG_TEST_WITH_ERR	0x2	/* Done with error.*/
+
 /*
  * Firmware options 1, 2, 3.
  */
@@ -2158,6 +2164,11 @@ typedef struct {
 #define CS_IOCB_ERROR		0x31	/* Generic error for IOCB request
 					   failure */
 #define CS_REJECT_RECEIVED	0x4E	/* Reject received */
+#define CS_EDIF_AUTH_ERROR	0x63	/* decrypt error */
+#define CS_EDIF_PAD_LEN_ERROR	0x65	/* pad > frame size, not 4byte align */
+#define CS_EDIF_INV_REQ		0x66	/* invalid request */
+#define CS_EDIF_SPI_ERROR	0x67	/* rx frame unable to locate sa */
+#define CS_EDIF_HDR_ERROR	0x69	/* data frame != expected len */
 #define CS_BAD_PAYLOAD		0x80	/* Driver defined */
 #define CS_UNKNOWN		0x81	/* Driver defined */
 #define CS_RETRY		0x82	/* Driver defined */
@@ -2626,7 +2637,6 @@ typedef struct fc_port {
 	struct {
 		uint32_t	enable:1;	/* device is edif enabled/req'd */
 		uint32_t	app_stop:2;
-		uint32_t	app_started:1;
 		uint32_t	aes_gmac:1;
 		uint32_t	app_sess_online:1;
 		uint32_t	tx_sa_set:1;
@@ -2637,6 +2647,7 @@ typedef struct fc_port {
 		uint32_t	rx_rekey_cnt;
 		uint64_t	tx_bytes;
 		uint64_t	rx_bytes;
+		uint8_t		sess_down_acked;
 		uint8_t		auth_state;
 		uint16_t	authok:1;
 		uint16_t	rekey_cnt;
@@ -2671,25 +2682,28 @@ struct event_arg {
 /*
  * Fibre channel port/lun states.
  */
-#define FCS_UNCONFIGURED	1
-#define FCS_DEVICE_DEAD		2
-#define FCS_DEVICE_LOST		3
-#define FCS_ONLINE		4
+enum {
+	FCS_UNKNOWN,
+	FCS_UNCONFIGURED,
+	FCS_DEVICE_DEAD,
+	FCS_DEVICE_LOST,
+	FCS_ONLINE,
+};
 
 extern const char *const port_state_str[5];
 
-static const char * const port_dstate_str[] = {
-	"DELETED",
-	"GNN_ID",
-	"GNL",
-	"LOGIN_PEND",
-	"LOGIN_FAILED",
-	"GPDB",
-	"UPD_FCPORT",
-	"LOGIN_COMPLETE",
-	"ADISC",
-	"DELETE_PEND",
-	"LOGIN_AUTH_PEND",
+static const char *const port_dstate_str[] = {
+	[DSC_DELETED]		= "DELETED",
+	[DSC_GNN_ID]		= "GNN_ID",
+	[DSC_GNL]		= "GNL",
+	[DSC_LOGIN_PEND]	= "LOGIN_PEND",
+	[DSC_LOGIN_FAILED]	= "LOGIN_FAILED",
+	[DSC_GPDB]		= "GPDB",
+	[DSC_UPD_FCPORT]	= "UPD_FCPORT",
+	[DSC_LOGIN_COMPLETE]	= "LOGIN_COMPLETE",
+	[DSC_ADISC]		= "ADISC",
+	[DSC_DELETE_PEND]	= "DELETE_PEND",
+	[DSC_LOGIN_AUTH_PEND]	= "LOGIN_AUTH_PEND",
 };
 
 /*
@@ -3201,6 +3215,8 @@ struct ct_sns_rsp {
 #define GFF_NVME_OFFSET		23 /* type = 28h */
 		struct {
 			uint8_t fc4_features[128];
+#define FC4_FF_TARGET    BIT_0
+#define FC4_FF_INITIATOR BIT_1
 		} gff_id;
 		struct {
 			uint8_t reserved;
@@ -3972,6 +3988,7 @@ struct qla_hw_data {
 	/* SRB cache. */
 #define SRB_MIN_REQ     128
 	mempool_t       *srb_mempool;
+	u8 port_name[WWN_SIZE];
 
 	volatile struct {
 		uint32_t	mbox_int		:1;
@@ -4037,6 +4054,9 @@ struct qla_hw_data {
 		uint32_t	n2n_fw_acc_sec:1;
 		uint32_t	plogi_template_valid:1;
 		uint32_t	port_isolated:1;
+		uint32_t	eeh_flush:2;
+#define EEH_FLUSH_RDY  1
+#define EEH_FLUSH_DONE 2
 	} flags;
 
 	uint16_t max_exchg;
@@ -4071,6 +4091,7 @@ struct qla_hw_data {
 	uint32_t		rsp_que_len;
 	uint32_t		req_que_off;
 	uint32_t		rsp_que_off;
+	unsigned long		eeh_jif;
 
 	/* Multi queue data structs */
 	device_reg_t *mqiobase;
@@ -4253,8 +4274,8 @@ struct qla_hw_data {
 #define IS_OEM_001(ha)          ((ha)->device_type & DT_OEM_001)
 #define HAS_EXTENDED_IDS(ha)    ((ha)->device_type & DT_EXTENDED_IDS)
 #define IS_CT6_SUPPORTED(ha)	((ha)->device_type & DT_CT6_SUPPORTED)
-#define IS_MQUE_CAPABLE(ha)	((ha)->mqenable || IS_QLA83XX(ha) || \
-				IS_QLA27XX(ha) || IS_QLA28XX(ha))
+#define IS_MQUE_CAPABLE(ha)	(IS_QLA83XX(ha) || IS_QLA27XX(ha) || \
+				 IS_QLA28XX(ha))
 #define IS_BIDI_CAPABLE(ha) \
     (IS_QLA25XX(ha) || IS_QLA2031(ha) || IS_QLA27XX(ha) || IS_QLA28XX(ha))
 /* Bit 21 of fw_attributes decides the MCTP capabilities */
@@ -4918,7 +4939,6 @@ typedef struct scsi_qla_host {
 
 	/* list of commands waiting on workqueue */
 	struct list_head	qla_cmd_list;
-	struct list_head	qla_sess_op_cmd_list;
 	struct list_head	unknown_atio_list;
 	spinlock_t		cmd_list_lock;
 	struct delayed_work	unknown_atio_work;
@@ -5010,6 +5030,10 @@ typedef struct scsi_qla_host {
 	u64 short_link_down_cnt;
 	struct edif_dbell e_dbell;
 	struct pur_core pur_cinfo;
+
+#define DPORT_DIAG_IN_PROGRESS                 BIT_0
+#define DPORT_DIAG_CHIP_RESET_IN_PROGRESS      BIT_1
+	uint16_t dport_status;
 } scsi_qla_host_t;
 
 struct qla27xx_image_status {
@@ -5202,8 +5226,6 @@ struct secure_flash_update_block_pk {
 #define OPTROM_BURST_DWORDS	(OPTROM_BURST_SIZE / 4)
 
 #define	QLA_DSDS_PER_IOCB	37
-
-#define CMD_SP(Cmnd)		((Cmnd)->SCp.ptr)
 
 #define QLA_SG_ALL	1024
 
@@ -5422,7 +5444,7 @@ struct ql_vnd_stat_entry {
 struct ql_vnd_stats {
 	u64 entry_count; /* Num of entries */
 	u64 rservd;
-	struct ql_vnd_stat_entry entry[0]; /* Place holder of entries */
+	struct ql_vnd_stat_entry entry[]; /* Place holder of entries */
 } __packed;
 
 struct ql_vnd_host_stats_resp {
@@ -5442,5 +5464,11 @@ struct ql_vnd_tgt_stats_resp {
 
 #define IS_SESSION_DELETED(_fcport) (_fcport->disc_state == DSC_DELETE_PEND || \
 				      _fcport->disc_state == DSC_DELETED)
+
+#define DBG_FCPORT_PRFMT(_fp, _fmt, _args...) \
+	"%s: %8phC: " _fmt " (state=%d disc_state=%d scan_state=%d loopid=0x%x deleted=%d flags=0x%x)\n", \
+	__func__, _fp->port_name, ##_args, atomic_read(&_fp->state), \
+	_fp->disc_state, _fp->scan_state, _fp->loop_id, _fp->deleted, \
+	_fp->flags
 
 #endif

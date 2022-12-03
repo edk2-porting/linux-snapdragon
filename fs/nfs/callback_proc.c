@@ -288,6 +288,7 @@ static u32 initiate_file_draining(struct nfs_client *clp,
 		rv = NFS4_OK;
 		break;
 	case -ENOENT:
+		set_bit(NFS_LAYOUT_DRAIN, &lo->plh_flags);
 		/* Embrace your forgetfulness! */
 		rv = NFS4ERR_NOMATCHING_LAYOUT;
 
@@ -701,7 +702,7 @@ __be32 nfs4_callback_offload(void *data, void *dummy,
 	struct nfs4_copy_state *copy, *tmp_copy;
 	bool found = false;
 
-	copy = kzalloc(sizeof(struct nfs4_copy_state), GFP_NOFS);
+	copy = kzalloc(sizeof(struct nfs4_copy_state), GFP_KERNEL);
 	if (!copy)
 		return htonl(NFS4ERR_SERVERFAULT);
 

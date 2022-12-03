@@ -12,6 +12,7 @@
 #include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/pm_runtime.h>
+#include <linux/random.h>
 #include <linux/sysfs.h>
 
 #include <linux/mmc/host.h>
@@ -70,6 +71,12 @@ static const unsigned int taac_mant[] = {
 static int mmc_decode_cid(struct mmc_card *card)
 {
 	u32 *resp = card->raw_cid;
+
+	/*
+	 * Add the raw card ID (cid) data to the entropy pool. It doesn't
+	 * matter that not all of it is unique, it's just bonus entropy.
+	 */
+	add_device_randomness(&card->raw_cid, sizeof(card->raw_cid));
 
 	/*
 	 * The selection of the format here is based upon published
@@ -1355,11 +1362,6 @@ static int mmc_select_hs400es(struct mmc_card *card)
 	int err = -EINVAL;
 	u8 val;
 
-	if (!(host->caps & MMC_CAP_8_BIT_DATA)) {
-		err = -ENOTSUPP;
-		goto out_err;
-	}
-
 	if (card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS400_1_2V)
 		err = mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_120);
 
@@ -1538,13 +1540,23 @@ static int mmc_select_timing(struct mmc_card *card)
 	if (!mmc_can_ext_csd(card))
 		goto bus_speed;
 
-	if (card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS400ES)
+	if (card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS400ES) {
 		err = mmc_select_hs400es(card);
-	else if (card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS200)
+		goto out;
+	}
+
+	if (card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS200) {
 		err = mmc_select_hs200(card);
-	else if (card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS)
+		if (err == -EBADMSG)
+			card->mmc_avail_type &= ~EXT_CSD_CARD_TYPE_HS200;
+		else
+			goto out;
+	}
+
+	if (card->mmc_avail_type & EXT_CSD_CARD_TYPE_HS)
 		err = mmc_select_hs(card);
 
+out:
 	if (err && err != -EBADMSG)
 		return err;
 
@@ -2235,11 +2247,11 @@ static int _mmc_hw_reset(struct mmc_host *host)
 	 */
 	_mmc_flush_cache(host);
 
-	if ((host->caps & MMC_CAP_HW_RESET) && host->ops->hw_reset &&
+	if ((host->caps & MMC_CAP_HW_RESET) && host->ops->card_hw_reset &&
 	     mmc_can_reset(card)) {
 		/* If the card accept RST_n signal, send it. */
 		mmc_set_clock(host, host->f_init);
-		host->ops->hw_reset(host);
+		host->ops->card_hw_reset(host);
 		/* Set initial state and call mmc_set_ios */
 		mmc_set_initial_state(host);
 	} else {

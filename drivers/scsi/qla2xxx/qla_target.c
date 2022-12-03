@@ -48,13 +48,6 @@ MODULE_PARM_DESC(qlini_mode,
 	"when ready "
 	"\"enabled\" (default) - initiator mode will always stay enabled.");
 
-static int ql_dm_tgt_ex_pct = 0;
-module_param(ql_dm_tgt_ex_pct, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(ql_dm_tgt_ex_pct,
-	"For Dual Mode (qlini_mode=dual), this parameter determines "
-	"the percentage of exchanges/cmds FW will allocate resources "
-	"for Target mode.");
-
 int ql2xuctrlirq = 1;
 module_param(ql2xuctrlirq, int, 0644);
 MODULE_PARM_DESC(ql2xuctrlirq,
@@ -988,22 +981,6 @@ void qlt_free_session_done(struct work_struct *work)
 		sess->send_els_logo);
 
 	if (!IS_SW_RESV_ADDR(sess->d_id)) {
-		if (ha->flags.edif_enabled &&
-		    (!own || own->iocb.u.isp24.status_subcode == ELS_PLOGI)) {
-			sess->edif.authok = 0;
-			if (!ha->flags.host_shutting_down) {
-				ql_dbg(ql_dbg_edif, vha, 0x911e,
-					"%s wwpn %8phC calling qla2x00_release_all_sadb\n",
-					__func__, sess->port_name);
-				qla2x00_release_all_sadb(vha, sess);
-			} else {
-				ql_dbg(ql_dbg_edif, vha, 0x911e,
-					"%s bypassing release_all_sadb\n",
-					__func__);
-			}
-			qla_edif_clear_appdata(vha, sess);
-			qla_edif_sess_down(vha, sess);
-		}
 		qla2x00_mark_device_lost(vha, sess, 0);
 
 		if (sess->send_els_logo) {
@@ -1048,6 +1025,25 @@ void qlt_free_session_done(struct work_struct *work)
 		    !(sess->nvme_flag & NVME_FLAG_DELETING)) {
 			sess->nvme_flag |= NVME_FLAG_DELETING;
 			qla_nvme_unregister_remote_port(sess);
+		}
+
+		if (ha->flags.edif_enabled &&
+		    (!own || (own &&
+			      own->iocb.u.isp24.status_subcode == ELS_PLOGI))) {
+			sess->edif.authok = 0;
+			if (!ha->flags.host_shutting_down) {
+				ql_dbg(ql_dbg_edif, vha, 0x911e,
+				       "%s wwpn %8phC calling qla2x00_release_all_sadb\n",
+				       __func__, sess->port_name);
+				qla2x00_release_all_sadb(vha, sess);
+			} else {
+				ql_dbg(ql_dbg_edif, vha, 0x911e,
+				       "%s bypassing release_all_sadb\n",
+				       __func__);
+			}
+
+			qla_edif_clear_appdata(vha, sess);
+			qla_edif_sess_down(vha, sess);
 		}
 	}
 
@@ -2024,17 +2020,6 @@ static void abort_cmds_for_lun(struct scsi_qla_host *vha, u64 lun, be_id_t s_id)
 
 	key = sid_to_key(s_id);
 	spin_lock_irqsave(&vha->cmd_list_lock, flags);
-	list_for_each_entry(op, &vha->qla_sess_op_cmd_list, cmd_list) {
-		uint32_t op_key;
-		u64 op_lun;
-
-		op_key = sid_to_key(op->atio.u.isp24.fcp_hdr.s_id);
-		op_lun = scsilun_to_int(
-			(struct scsi_lun *)&op->atio.u.isp24.fcp_cmnd.lun);
-		if (op_key == key && op_lun == lun)
-			op->aborted = true;
-	}
-
 	list_for_each_entry(op, &vha->unknown_atio_list, cmd_list) {
 		uint32_t op_key;
 		u64 op_lun;
@@ -2166,8 +2151,10 @@ static int __qlt_24xx_handle_abts(struct scsi_qla_host *vha,
 
 	abort_cmd = ha->tgt.tgt_ops->find_cmd_by_tag(sess,
 				le32_to_cpu(abts->exchange_addr_to_abort));
-	if (!abort_cmd)
+	if (!abort_cmd) {
+		mempool_free(mcmd, qla_tgt_mgmt_cmd_mempool);
 		return -EIO;
+	}
 	mcmd->unpacked_lun = abort_cmd->se_cmd.orig_fe_lun;
 
 	if (abort_cmd->qpair) {
@@ -3837,6 +3824,9 @@ int qlt_abort_cmd(struct qla_tgt_cmd *cmd)
 
 	spin_lock_irqsave(&cmd->cmd_lock, flags);
 	if (cmd->aborted) {
+		if (cmd->sg_mapped)
+			qlt_unmap_sg(vha, cmd);
+
 		spin_unlock_irqrestore(&cmd->cmd_lock, flags);
 		/*
 		 * It's normal to see 2 calls in this path:
@@ -3874,8 +3864,6 @@ void qlt_free_cmd(struct qla_tgt_cmd *cmd)
 
 	BUG_ON(cmd->sg_mapped);
 	cmd->jiffies_at_free = get_jiffies_64();
-	if (unlikely(cmd->free_sg))
-		kfree(cmd->sg);
 
 	if (!sess || !sess->se_sess) {
 		WARN_ON(1);
@@ -4726,15 +4714,6 @@ static int abort_cmds_for_s_id(struct scsi_qla_host *vha, port_id_t *s_id)
 	       ((u32)s_id->b.al_pa));
 
 	spin_lock_irqsave(&vha->cmd_list_lock, flags);
-	list_for_each_entry(op, &vha->qla_sess_op_cmd_list, cmd_list) {
-		uint32_t op_key = sid_to_key(op->atio.u.isp24.fcp_hdr.s_id);
-
-		if (op_key == key) {
-			op->aborted = true;
-			count++;
-		}
-	}
-
 	list_for_each_entry(op, &vha->unknown_atio_list, cmd_list) {
 		uint32_t op_key = sid_to_key(op->atio.u.isp24.fcp_hdr.s_id);
 
@@ -6958,14 +6937,8 @@ qlt_24xx_config_rings(struct scsi_qla_host *vha)
 
 	if (ha->flags.msix_enabled) {
 		if (IS_QLA83XX(ha) || IS_QLA27XX(ha) || IS_QLA28XX(ha)) {
-			if (IS_QLA2071(ha)) {
-				/* 4 ports Baker: Enable Interrupt Handshake */
-				icb->msix_atio = 0;
-				icb->firmware_options_2 |= cpu_to_le32(BIT_26);
-			} else {
-				icb->msix_atio = cpu_to_le16(msix->entry);
-				icb->firmware_options_2 &= cpu_to_le32(~BIT_26);
-			}
+			icb->msix_atio = cpu_to_le16(msix->entry);
+			icb->firmware_options_2 &= cpu_to_le32(~BIT_26);
 			ql_dbg(ql_dbg_init, vha, 0xf072,
 			    "Registering ICB vector 0x%x for atio que.\n",
 			    msix->entry);

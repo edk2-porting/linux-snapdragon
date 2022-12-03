@@ -332,9 +332,6 @@ static int hi3660_pcie_phy_init(struct platform_device *pdev,
 	pcie->phy_priv = phy;
 	phy->dev = dev;
 
-	/* registers */
-	pdev = container_of(dev, struct platform_device, dev);
-
 	ret = hi3660_pcie_phy_get_clk(phy);
 	if (ret)
 		return ret;
@@ -623,7 +620,7 @@ static int kirin_pcie_start_link(struct dw_pcie *pci)
 	return 0;
 }
 
-static int kirin_pcie_host_init(struct pcie_port *pp)
+static int kirin_pcie_host_init(struct dw_pcie_rp *pp)
 {
 	pp->bridge->ops = &kirin_pci_ops;
 

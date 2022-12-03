@@ -1546,9 +1546,8 @@ static void hclge_init_tc_config(struct hclge_dev *hdev)
 static int hclge_configure(struct hclge_dev *hdev)
 {
 	struct hnae3_ae_dev *ae_dev = pci_get_drvdata(hdev->pdev);
-	const struct cpumask *cpumask = cpu_online_mask;
 	struct hclge_cfg cfg;
-	int node, ret;
+	int ret;
 
 	ret = hclge_get_cfg(hdev, &cfg);
 	if (ret)
@@ -1594,13 +1593,6 @@ static int hclge_configure(struct hclge_dev *hdev)
 	hclge_init_tc_config(hdev);
 	hclge_init_kdump_kernel_config(hdev);
 
-	/* Set the affinity based on numa node */
-	node = dev_to_node(&hdev->pdev->dev);
-	if (node != NUMA_NO_NODE)
-		cpumask = cpumask_of_node(node);
-
-	cpumask_copy(&hdev->affinity_mask, cpumask);
-
 	return ret;
 }
 
@@ -1643,6 +1635,7 @@ static int hclge_config_gro(struct hclge_dev *hdev)
 
 static int hclge_alloc_tqps(struct hclge_dev *hdev)
 {
+	struct hnae3_ae_dev *ae_dev = pci_get_drvdata(hdev->pdev);
 	struct hclge_comm_tqp *tqp;
 	int i;
 
@@ -1675,6 +1668,14 @@ static int hclge_alloc_tqps(struct hclge_dev *hdev)
 					 HCLGE_TQP_EXT_REG_OFFSET +
 					 (i - HCLGE_TQP_MAX_SIZE_DEV_V2) *
 					 HCLGE_TQP_REG_SIZE;
+
+		/* when device supports tx push and has device memory,
+		 * the queue can execute push mode or doorbell mode on
+		 * device memory.
+		 */
+		if (test_bit(HNAE3_DEV_SUPPORT_TX_PUSH_B, ae_dev->caps))
+			tqp->q.mem_base = hdev->hw.hw.mem_base +
+					  HCLGE_TQP_MEM_OFFSET(hdev, i);
 
 		tqp++;
 	}
@@ -3245,6 +3246,7 @@ static int hclge_update_tp_port_info(struct hclge_dev *hdev)
 	hdev->hw.mac.autoneg = cmd.base.autoneg;
 	hdev->hw.mac.speed = cmd.base.speed;
 	hdev->hw.mac.duplex = cmd.base.duplex;
+	linkmode_copy(hdev->hw.mac.advertising, cmd.link_modes.advertising);
 
 	return 0;
 }
@@ -3267,7 +3269,7 @@ static int hclge_tp_port_init(struct hclge_dev *hdev)
 static int hclge_update_port_info(struct hclge_dev *hdev)
 {
 	struct hclge_mac *mac = &hdev->hw.mac;
-	int speed = HCLGE_MAC_SPEED_UNKNOWN;
+	int speed;
 	int ret;
 
 	/* get the port info from SFP cmd if not copper port */
@@ -3278,10 +3280,13 @@ static int hclge_update_port_info(struct hclge_dev *hdev)
 	if (!hdev->support_sfp_query)
 		return 0;
 
-	if (hdev->ae_dev->dev_version >= HNAE3_DEVICE_VERSION_V2)
+	if (hdev->ae_dev->dev_version >= HNAE3_DEVICE_VERSION_V2) {
+		speed = mac->speed;
 		ret = hclge_get_sfp_info(hdev, mac);
-	else
+	} else {
+		speed = HCLGE_MAC_SPEED_UNKNOWN;
 		ret = hclge_get_sfp_speed(hdev, &speed);
+	}
 
 	if (ret == -EOPNOTSUPP) {
 		hdev->support_sfp_query = false;
@@ -3293,6 +3298,8 @@ static int hclge_update_port_info(struct hclge_dev *hdev)
 	if (hdev->ae_dev->dev_version >= HNAE3_DEVICE_VERSION_V2) {
 		if (mac->speed_type == QUERY_ACTIVE_SPEED) {
 			hclge_update_port_capability(hdev, mac);
+			if (mac->speed != speed)
+				(void)hclge_tm_port_shaper_cfg(hdev);
 			return 0;
 		}
 		return hclge_cfg_mac_speed_dup(hdev, mac->speed,
@@ -3374,6 +3381,12 @@ static int hclge_set_vf_link_state(struct hnae3_handle *handle, int vf,
 
 	link_state_old = vport->vf_info.link_state;
 	vport->vf_info.link_state = link_state;
+
+	/* return success directly if the VF is unalive, VF will
+	 * query link state itself when it starts work.
+	 */
+	if (!test_bit(HCLGE_VPORT_STATE_ALIVE, &vport->state))
+		return 0;
 
 	ret = hclge_push_vf_link_status(vport);
 	if (ret) {
@@ -3553,17 +3566,6 @@ static void hclge_get_misc_vector(struct hclge_dev *hdev)
 
 	hdev->num_msi_left -= 1;
 	hdev->num_msi_used += 1;
-}
-
-static void hclge_misc_affinity_setup(struct hclge_dev *hdev)
-{
-	irq_set_affinity_hint(hdev->misc_vector.vector_irq,
-			      &hdev->affinity_mask);
-}
-
-static void hclge_misc_affinity_teardown(struct hclge_dev *hdev)
-{
-	irq_set_affinity_hint(hdev->misc_vector.vector_irq, NULL);
 }
 
 static int hclge_misc_irq_init(struct hclge_dev *hdev)
@@ -4661,7 +4663,6 @@ static int hclge_set_rss_tuple(struct hnae3_handle *handle,
 		return ret;
 	}
 
-	hclge_comm_get_rss_type(&vport->nic, &hdev->rss_cfg.rss_tuple_sets);
 	return 0;
 }
 
@@ -10127,6 +10128,7 @@ static int hclge_modify_port_base_vlan_tag(struct hclge_vport *vport,
 	if (ret)
 		return ret;
 
+	vport->port_base_vlan_cfg.tbl_sta = false;
 	/* remove old VLAN tag */
 	if (old_info->vlan_tag == 0)
 		ret = hclge_set_vf_vlan_common(hdev, vport->vport_id,
@@ -10440,6 +10442,9 @@ int hclge_set_vport_mtu(struct hclge_vport *vport, int new_mtu)
 	/* PF's mps must be greater then VF's mps */
 	for (i = 1; i < hdev->num_alloc_vport; i++)
 		if (max_frm_size < hdev->vport[i].mps) {
+			dev_err(&hdev->pdev->dev,
+				"failed to set pf mtu for less than vport %d, mps = %u.\n",
+				i, hdev->vport[i].mps);
 			mutex_unlock(&hdev->vport_lock);
 			return -EINVAL;
 		}
@@ -11069,8 +11074,6 @@ static void hclge_uninit_client_instance(struct hnae3_client *client,
 
 static int hclge_dev_mem_map(struct hclge_dev *hdev)
 {
-#define HCLGE_MEM_BAR		4
-
 	struct pci_dev *pdev = hdev->pdev;
 	struct hclge_hw *hw = &hdev->hw;
 
@@ -11371,9 +11374,12 @@ static int hclge_init_ae_dev(struct hnae3_ae_dev *ae_dev)
 	if (ret)
 		goto err_msi_irq_uninit;
 
-	if (hdev->hw.mac.media_type == HNAE3_MEDIA_TYPE_COPPER &&
-	    !hnae3_dev_phy_imp_supported(hdev)) {
-		ret = hclge_mac_mdio_config(hdev);
+	if (hdev->hw.mac.media_type == HNAE3_MEDIA_TYPE_COPPER) {
+		if (hnae3_dev_phy_imp_supported(hdev))
+			ret = hclge_update_tp_port_info(hdev);
+		else
+			ret = hclge_mac_mdio_config(hdev);
+
 		if (ret)
 			goto err_msi_irq_uninit;
 	}
@@ -11446,11 +11452,6 @@ static int hclge_init_ae_dev(struct hnae3_ae_dev *ae_dev)
 
 	timer_setup(&hdev->reset_timer, hclge_reset_timer, 0);
 	INIT_DELAYED_WORK(&hdev->service_task, hclge_service_task);
-
-	/* Setup affinity after service timer setup because add_timer_on
-	 * is called in affinity notify.
-	 */
-	hclge_misc_affinity_setup(hdev);
 
 	hclge_clear_all_event_cause(hdev);
 	hclge_clear_resetting_state(hdev);
@@ -11869,7 +11870,6 @@ static void hclge_uninit_ae_dev(struct hnae3_ae_dev *ae_dev)
 
 	hclge_reset_vf_rate(hdev);
 	hclge_clear_vf_vlan(hdev);
-	hclge_misc_affinity_teardown(hdev);
 	hclge_state_uninit(hdev);
 	hclge_ptp_uninit(hdev);
 	hclge_uninit_rxd_adv_layout(hdev);

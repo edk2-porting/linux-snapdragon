@@ -709,6 +709,13 @@ static int enetc_pf_set_features(struct net_device *ndev,
 {
 	netdev_features_t changed = ndev->features ^ features;
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+	int err;
+
+	if (changed & NETIF_F_HW_TC) {
+		err = enetc_set_psfp(ndev, !!(features & NETIF_F_HW_TC));
+		if (err)
+			return err;
+	}
 
 	if (changed & NETIF_F_HW_VLAN_CTAG_FILTER) {
 		struct enetc_pf *pf = enetc_si_priv(priv->si);
@@ -722,7 +729,28 @@ static int enetc_pf_set_features(struct net_device *ndev,
 	if (changed & NETIF_F_LOOPBACK)
 		enetc_set_loopback(ndev, !!(features & NETIF_F_LOOPBACK));
 
-	return enetc_set_features(ndev, features);
+	enetc_set_features(ndev, features);
+
+	return 0;
+}
+
+static int enetc_pf_setup_tc(struct net_device *ndev, enum tc_setup_type type,
+			     void *type_data)
+{
+	switch (type) {
+	case TC_SETUP_QDISC_MQPRIO:
+		return enetc_setup_tc_mqprio(ndev, type_data);
+	case TC_SETUP_QDISC_TAPRIO:
+		return enetc_setup_tc_taprio(ndev, type_data);
+	case TC_SETUP_QDISC_CBS:
+		return enetc_setup_tc_cbs(ndev, type_data);
+	case TC_SETUP_QDISC_ETF:
+		return enetc_setup_tc_txtime(ndev, type_data);
+	case TC_SETUP_BLOCK:
+		return enetc_setup_tc_psfp(ndev, type_data);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 static const struct net_device_ops enetc_ndev_ops = {
@@ -739,7 +767,7 @@ static const struct net_device_ops enetc_ndev_ops = {
 	.ndo_set_vf_spoofchk	= enetc_pf_set_vf_spoofchk,
 	.ndo_set_features	= enetc_pf_set_features,
 	.ndo_eth_ioctl		= enetc_ioctl,
-	.ndo_setup_tc		= enetc_setup_tc,
+	.ndo_setup_tc		= enetc_pf_setup_tc,
 	.ndo_bpf		= enetc_setup_bpf,
 	.ndo_xdp_xmit		= enetc_xdp_xmit,
 };
@@ -776,9 +804,6 @@ static void enetc_pf_netdev_setup(struct enetc_si *si, struct net_device *ndev,
 		ndev->hw_features |= NETIF_F_RXHASH;
 
 	ndev->priv_flags |= IFF_UNICAST_FLT;
-
-	if (si->hw_features & ENETC_SI_F_QBV)
-		priv->active_offloads |= ENETC_F_QBV;
 
 	if (si->hw_features & ENETC_SI_F_PSFP && !enetc_psfp_enable(priv)) {
 		priv->active_offloads |= ENETC_F_QCI;
@@ -934,18 +959,21 @@ static void enetc_mdiobus_destroy(struct enetc_pf *pf)
 	enetc_imdio_remove(pf);
 }
 
+static struct phylink_pcs *
+enetc_pl_mac_select_pcs(struct phylink_config *config, phy_interface_t iface)
+{
+	struct enetc_pf *pf = phylink_to_enetc_pf(config);
+
+	return pf->pcs;
+}
+
 static void enetc_pl_mac_config(struct phylink_config *config,
 				unsigned int mode,
 				const struct phylink_link_state *state)
 {
 	struct enetc_pf *pf = phylink_to_enetc_pf(config);
-	struct enetc_ndev_priv *priv;
 
 	enetc_mac_config(&pf->si->hw, state->interface);
-
-	priv = netdev_priv(pf->si->ndev);
-	if (pf->pcs)
-		phylink_set_pcs(priv->phylink, pf->pcs);
 }
 
 static void enetc_force_rgmii_mac(struct enetc_hw *hw, int speed, int duplex)
@@ -990,7 +1018,8 @@ static void enetc_pl_mac_link_up(struct phylink_config *config,
 	int idx;
 
 	priv = netdev_priv(pf->si->ndev);
-	if (priv->active_offloads & ENETC_F_QBV)
+
+	if (pf->si->hw_features & ENETC_SI_F_QBV)
 		enetc_sched_speed_set(priv, speed);
 
 	if (!phylink_autoneg_inband(mode) &&
@@ -1062,6 +1091,7 @@ static void enetc_pl_mac_link_down(struct phylink_config *config,
 
 static const struct phylink_mac_ops enetc_mac_phylink_ops = {
 	.validate = phylink_generic_validate,
+	.mac_select_pcs = enetc_pl_mac_select_pcs,
 	.mac_config = enetc_pl_mac_config,
 	.mac_link_up = enetc_pl_mac_link_up,
 	.mac_link_down = enetc_pl_mac_link_down,
@@ -1103,8 +1133,7 @@ static int enetc_phylink_create(struct enetc_ndev_priv *priv,
 
 static void enetc_phylink_destroy(struct enetc_ndev_priv *priv)
 {
-	if (priv->phylink)
-		phylink_destroy(priv->phylink);
+	phylink_destroy(priv->phylink);
 }
 
 /* Initialize the entire shared memory for the flow steering entries
@@ -1271,15 +1300,19 @@ static int enetc_pf_probe(struct pci_dev *pdev,
 		goto err_alloc_msix;
 	}
 
-	if (!of_get_phy_mode(node, &pf->if_mode)) {
-		err = enetc_mdiobus_create(pf, node);
-		if (err)
-			goto err_mdiobus_create;
-
-		err = enetc_phylink_create(priv, node);
-		if (err)
-			goto err_phylink_create;
+	err = of_get_phy_mode(node, &pf->if_mode);
+	if (err) {
+		dev_err(&pdev->dev, "Failed to read PHY mode\n");
+		goto err_phy_mode;
 	}
+
+	err = enetc_mdiobus_create(pf, node);
+	if (err)
+		goto err_mdiobus_create;
+
+	err = enetc_phylink_create(priv, node);
+	if (err)
+		goto err_phylink_create;
 
 	err = register_netdev(ndev);
 	if (err)
@@ -1292,6 +1325,7 @@ err_reg_netdev:
 err_phylink_create:
 	enetc_mdiobus_destroy(pf);
 err_mdiobus_create:
+err_phy_mode:
 	enetc_free_msix(priv);
 err_config_si:
 err_alloc_msix:

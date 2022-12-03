@@ -174,6 +174,7 @@ MODULE_DEVICE_TABLE(of, st7735r_of_match);
 
 static const struct spi_device_id st7735r_id[] = {
 	{ "jd-t18003-t01", (uintptr_t)&jd_t18003_t01_cfg },
+	{ "rh128128t", (uintptr_t)&rh128128t_cfg },
 	{ },
 };
 MODULE_DEVICE_TABLE(spi, st7735r_id);
@@ -247,14 +248,12 @@ static int st7735r_probe(struct spi_device *spi)
 	return 0;
 }
 
-static int st7735r_remove(struct spi_device *spi)
+static void st7735r_remove(struct spi_device *spi)
 {
 	struct drm_device *drm = spi_get_drvdata(spi);
 
 	drm_dev_unplug(drm);
 	drm_atomic_helper_shutdown(drm);
-
-	return 0;
 }
 
 static void st7735r_shutdown(struct spi_device *spi)

@@ -10,37 +10,6 @@
 
 #define _HAL_INIT_C_
 
-void dump_chip_info(struct HAL_VERSION	chip_vers)
-{
-	uint cnt = 0;
-	char buf[128];
-
-	cnt += sprintf((buf + cnt), "Chip Version Info: CHIP_8188E_");
-	cnt += sprintf((buf + cnt), "%s_", IS_NORMAL_CHIP(chip_vers) ?
-		       "Normal_Chip" : "Test_Chip");
-	cnt += sprintf((buf + cnt), "%s_", IS_CHIP_VENDOR_TSMC(chip_vers) ?
-		       "TSMC" : "UMC");
-	if (IS_A_CUT(chip_vers))
-		cnt += sprintf((buf + cnt), "A_CUT_");
-	else if (IS_B_CUT(chip_vers))
-		cnt += sprintf((buf + cnt), "B_CUT_");
-	else if (IS_C_CUT(chip_vers))
-		cnt += sprintf((buf + cnt), "C_CUT_");
-	else if (IS_D_CUT(chip_vers))
-		cnt += sprintf((buf + cnt), "D_CUT_");
-	else if (IS_E_CUT(chip_vers))
-		cnt += sprintf((buf + cnt), "E_CUT_");
-	else
-		cnt += sprintf((buf + cnt), "UNKNOWN_CUT(%d)_",
-			       chip_vers.CUTVersion);
-
-	cnt += sprintf((buf + cnt), "1T1R_");
-
-	cnt += sprintf((buf + cnt), "RomVer(%d)\n", chip_vers.ROMVer);
-
-	pr_info("%s", buf);
-}
-
 #define	CHAN_PLAN_HW	0x80
 
 u8 /* return the final channel plan decision */
@@ -259,7 +228,7 @@ static void three_out_pipe(struct adapter *adapter, bool wifi_cfg)
 bool Hal_MappingOutPipe(struct adapter *adapter, u8 numoutpipe)
 {
 	struct registry_priv *pregistrypriv = &adapter->registrypriv;
-	bool  wifi_cfg = (pregistrypriv->wifi_spec) ? true : false;
+	bool wifi_cfg = pregistrypriv->wifi_spec;
 	bool result = true;
 
 	switch (numoutpipe) {
@@ -279,21 +248,11 @@ bool Hal_MappingOutPipe(struct adapter *adapter, u8 numoutpipe)
 	return result;
 }
 
-void hal_init_macaddr(struct adapter *adapter)
-{
-	SetHwReg8188EU(adapter, HW_VAR_MAC_ADDR, adapter->eeprompriv.mac_addr);
-}
-
 /*
 * C2H event format:
 * Field	 TRIGGER		CONTENT	   CMD_SEQ	CMD_LEN		 CMD_ID
 * BITS	 [127:120]	[119:16]      [15:8]		  [7:4]		   [3:0]
 */
-
-void c2h_evt_clear(struct adapter *adapter)
-{
-	rtw_write8(adapter, REG_C2HEVT_CLEAR, C2H_EVT_HOST_CLOSE);
-}
 
 s32 c2h_evt_read(struct adapter *adapter, u8 *buf)
 {
@@ -305,7 +264,9 @@ s32 c2h_evt_read(struct adapter *adapter, u8 *buf)
 	if (!buf)
 		goto exit;
 
-	trigger = rtw_read8(adapter, REG_C2HEVT_CLEAR);
+	ret = rtw_read8(adapter, REG_C2HEVT_CLEAR, &trigger);
+	if (ret)
+		return _FAIL;
 
 	if (trigger == C2H_EVT_HOST_CLOSE)
 		goto exit; /* Not ready */
@@ -316,13 +277,26 @@ s32 c2h_evt_read(struct adapter *adapter, u8 *buf)
 
 	memset(c2h_evt, 0, 16);
 
-	*buf = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL);
-	*(buf + 1) = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL + 1);
+	ret = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL, buf);
+	if (ret) {
+		ret = _FAIL;
+		goto clear_evt;
+	}
 
+	ret = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL + 1, buf + 1);
+	if (ret) {
+		ret = _FAIL;
+		goto clear_evt;
+	}
 	/* Read the content */
-	for (i = 0; i < c2h_evt->plen; i++)
-		c2h_evt->payload[i] = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL +
-						sizeof(*c2h_evt) + i);
+	for (i = 0; i < c2h_evt->plen; i++) {
+		ret = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL +
+						sizeof(*c2h_evt) + i, c2h_evt->payload + i);
+		if (ret) {
+			ret = _FAIL;
+			goto clear_evt;
+		}
+	}
 
 	ret = _SUCCESS;
 
@@ -332,7 +306,7 @@ clear_evt:
 	* If this field isn't clear, the FW won't update the next
 	* command message.
 	*/
-	c2h_evt_clear(adapter);
+	rtw_write8(adapter, REG_C2HEVT_CLEAR, C2H_EVT_HOST_CLOSE);
 exit:
 	return ret;
 }

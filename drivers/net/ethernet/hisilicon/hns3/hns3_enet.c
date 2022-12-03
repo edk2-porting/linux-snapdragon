@@ -105,26 +105,28 @@ static const struct pci_device_id hns3_pci_tbl[] = {
 };
 MODULE_DEVICE_TABLE(pci, hns3_pci_tbl);
 
-#define HNS3_RX_PTYPE_ENTRY(ptype, l, s, t) \
+#define HNS3_RX_PTYPE_ENTRY(ptype, l, s, t, h) \
 	{	ptype, \
 		l, \
 		CHECKSUM_##s, \
 		HNS3_L3_TYPE_##t, \
-		1 }
+		1, \
+		h}
 
 #define HNS3_RX_PTYPE_UNUSED_ENTRY(ptype) \
-		{ ptype, 0, CHECKSUM_NONE, HNS3_L3_TYPE_PARSE_FAIL, 0 }
+		{ ptype, 0, CHECKSUM_NONE, HNS3_L3_TYPE_PARSE_FAIL, 0, \
+		  PKT_HASH_TYPE_NONE }
 
 static const struct hns3_rx_ptype hns3_rx_ptype_tbl[] = {
 	HNS3_RX_PTYPE_UNUSED_ENTRY(0),
-	HNS3_RX_PTYPE_ENTRY(1, 0, COMPLETE, ARP),
-	HNS3_RX_PTYPE_ENTRY(2, 0, COMPLETE, RARP),
-	HNS3_RX_PTYPE_ENTRY(3, 0, COMPLETE, LLDP),
-	HNS3_RX_PTYPE_ENTRY(4, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(5, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(6, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(7, 0, COMPLETE, CNM),
-	HNS3_RX_PTYPE_ENTRY(8, 0, NONE, PARSE_FAIL),
+	HNS3_RX_PTYPE_ENTRY(1, 0, COMPLETE, ARP, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(2, 0, COMPLETE, RARP, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(3, 0, COMPLETE, LLDP, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(4, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(5, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(6, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(7, 0, COMPLETE, CNM, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(8, 0, NONE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(9),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(10),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(11),
@@ -132,36 +134,36 @@ static const struct hns3_rx_ptype hns3_rx_ptype_tbl[] = {
 	HNS3_RX_PTYPE_UNUSED_ENTRY(13),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(14),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(15),
-	HNS3_RX_PTYPE_ENTRY(16, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(17, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(18, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(19, 0, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(20, 0, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(21, 0, NONE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(22, 0, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(23, 0, NONE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(24, 0, NONE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(25, 0, UNNECESSARY, IPV4),
+	HNS3_RX_PTYPE_ENTRY(16, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(17, 0, COMPLETE, IPV4, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(18, 0, COMPLETE, IPV4, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(19, 0, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(20, 0, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(21, 0, NONE, IPV4, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(22, 0, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(23, 0, NONE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(24, 0, NONE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(25, 0, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(26),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(27),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(28),
-	HNS3_RX_PTYPE_ENTRY(29, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(30, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(31, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(32, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(33, 1, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(34, 1, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(35, 1, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(36, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(37, 0, COMPLETE, IPV4),
+	HNS3_RX_PTYPE_ENTRY(29, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(30, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(31, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(32, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(33, 1, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(34, 1, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(35, 1, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(36, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(37, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(38),
-	HNS3_RX_PTYPE_ENTRY(39, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(40, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(41, 1, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(42, 1, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(43, 1, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(44, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(45, 0, COMPLETE, IPV6),
+	HNS3_RX_PTYPE_ENTRY(39, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(40, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(41, 1, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(42, 1, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(43, 1, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(44, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(45, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(46),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(47),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(48),
@@ -227,35 +229,35 @@ static const struct hns3_rx_ptype hns3_rx_ptype_tbl[] = {
 	HNS3_RX_PTYPE_UNUSED_ENTRY(108),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(109),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(110),
-	HNS3_RX_PTYPE_ENTRY(111, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(112, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(113, 0, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(114, 0, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(115, 0, NONE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(116, 0, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(117, 0, NONE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(118, 0, NONE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(119, 0, UNNECESSARY, IPV6),
+	HNS3_RX_PTYPE_ENTRY(111, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(112, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(113, 0, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(114, 0, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(115, 0, NONE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(116, 0, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(117, 0, NONE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(118, 0, NONE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(119, 0, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(120),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(121),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(122),
-	HNS3_RX_PTYPE_ENTRY(123, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(124, 0, COMPLETE, PARSE_FAIL),
-	HNS3_RX_PTYPE_ENTRY(125, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(126, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(127, 1, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(128, 1, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(129, 1, UNNECESSARY, IPV4),
-	HNS3_RX_PTYPE_ENTRY(130, 0, COMPLETE, IPV4),
-	HNS3_RX_PTYPE_ENTRY(131, 0, COMPLETE, IPV4),
+	HNS3_RX_PTYPE_ENTRY(123, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(124, 0, COMPLETE, PARSE_FAIL, PKT_HASH_TYPE_NONE),
+	HNS3_RX_PTYPE_ENTRY(125, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(126, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(127, 1, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(128, 1, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(129, 1, UNNECESSARY, IPV4, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(130, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(131, 0, COMPLETE, IPV4, PKT_HASH_TYPE_L3),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(132),
-	HNS3_RX_PTYPE_ENTRY(133, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(134, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(135, 1, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(136, 1, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(137, 1, UNNECESSARY, IPV6),
-	HNS3_RX_PTYPE_ENTRY(138, 0, COMPLETE, IPV6),
-	HNS3_RX_PTYPE_ENTRY(139, 0, COMPLETE, IPV6),
+	HNS3_RX_PTYPE_ENTRY(133, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(134, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(135, 1, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(136, 1, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(137, 1, UNNECESSARY, IPV6, PKT_HASH_TYPE_L4),
+	HNS3_RX_PTYPE_ENTRY(138, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
+	HNS3_RX_PTYPE_ENTRY(139, 0, COMPLETE, IPV6, PKT_HASH_TYPE_L3),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(140),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(141),
 	HNS3_RX_PTYPE_UNUSED_ENTRY(142),
@@ -1838,9 +1840,9 @@ static unsigned int hns3_tx_bd_num(struct sk_buff *skb, unsigned int *bd_size,
 static unsigned int hns3_gso_hdr_len(struct sk_buff *skb)
 {
 	if (!skb->encapsulation)
-		return skb_transport_offset(skb) + tcp_hdrlen(skb);
+		return skb_tcp_all_headers(skb);
 
-	return skb_inner_transport_offset(skb) + inner_tcp_hdrlen(skb);
+	return skb_inner_tcp_all_headers(skb);
 }
 
 /* HW need every continuous max_non_tso_bd_num buffer data to be larger
@@ -2038,9 +2040,73 @@ static int hns3_fill_skb_to_desc(struct hns3_enet_ring *ring,
 	return bd_num;
 }
 
+static void hns3_tx_push_bd(struct hns3_enet_ring *ring, int num)
+{
+#define HNS3_BYTES_PER_64BIT		8
+
+	struct hns3_desc desc[HNS3_MAX_PUSH_BD_NUM] = {};
+	int offset = 0;
+
+	/* make sure everything is visible to device before
+	 * excuting tx push or updating doorbell
+	 */
+	dma_wmb();
+
+	do {
+		int idx = (ring->next_to_use - num + ring->desc_num) %
+			  ring->desc_num;
+
+		u64_stats_update_begin(&ring->syncp);
+		ring->stats.tx_push++;
+		u64_stats_update_end(&ring->syncp);
+		memcpy(&desc[offset], &ring->desc[idx],
+		       sizeof(struct hns3_desc));
+		offset++;
+	} while (--num);
+
+	__iowrite64_copy(ring->tqp->mem_base, desc,
+			 (sizeof(struct hns3_desc) * HNS3_MAX_PUSH_BD_NUM) /
+			 HNS3_BYTES_PER_64BIT);
+
+	io_stop_wc();
+}
+
+static void hns3_tx_mem_doorbell(struct hns3_enet_ring *ring)
+{
+#define HNS3_MEM_DOORBELL_OFFSET	64
+
+	__le64 bd_num = cpu_to_le64((u64)ring->pending_buf);
+
+	/* make sure everything is visible to device before
+	 * excuting tx push or updating doorbell
+	 */
+	dma_wmb();
+
+	__iowrite64_copy(ring->tqp->mem_base + HNS3_MEM_DOORBELL_OFFSET,
+			 &bd_num, 1);
+	u64_stats_update_begin(&ring->syncp);
+	ring->stats.tx_mem_doorbell += ring->pending_buf;
+	u64_stats_update_end(&ring->syncp);
+
+	io_stop_wc();
+}
+
 static void hns3_tx_doorbell(struct hns3_enet_ring *ring, int num,
 			     bool doorbell)
 {
+	struct net_device *netdev = ring_to_netdev(ring);
+	struct hns3_nic_priv *priv = netdev_priv(netdev);
+
+	/* when tx push is enabled, the packet whose number of BD below
+	 * HNS3_MAX_PUSH_BD_NUM can be pushed directly.
+	 */
+	if (test_bit(HNS3_NIC_STATE_TX_PUSH_ENABLE, &priv->state) && num &&
+	    !ring->pending_buf && num <= HNS3_MAX_PUSH_BD_NUM && doorbell) {
+		hns3_tx_push_bd(ring, num);
+		WRITE_ONCE(ring->last_to_use, ring->next_to_use);
+		return;
+	}
+
 	ring->pending_buf += num;
 
 	if (!doorbell) {
@@ -2048,11 +2114,12 @@ static void hns3_tx_doorbell(struct hns3_enet_ring *ring, int num,
 		return;
 	}
 
-	if (!ring->pending_buf)
-		return;
+	if (ring->tqp->mem_base)
+		hns3_tx_mem_doorbell(ring);
+	else
+		writel(ring->pending_buf,
+		       ring->tqp->io_base + HNS3_RING_TX_RING_TAIL_REG);
 
-	writel(ring->pending_buf,
-	       ring->tqp->io_base + HNS3_RING_TX_RING_TAIL_REG);
 	ring->pending_buf = 0;
 	WRITE_ONCE(ring->last_to_use, ring->next_to_use);
 }
@@ -2742,6 +2809,9 @@ static void hns3_dump_queue_stats(struct net_device *ndev,
 		    "seg_pkt_cnt: %llu, tx_more: %llu, restart_queue: %llu, tx_busy: %llu\n",
 		    tx_ring->stats.seg_pkt_cnt, tx_ring->stats.tx_more,
 		    tx_ring->stats.restart_queue, tx_ring->stats.tx_busy);
+
+	netdev_info(ndev, "tx_push: %llu, tx_mem_doorbell: %llu\n",
+		    tx_ring->stats.tx_push, tx_ring->stats.tx_mem_doorbell);
 }
 
 static void hns3_dump_queue_reg(struct net_device *ndev,
@@ -3666,8 +3736,8 @@ static void hns3_nic_reuse_page(struct sk_buff *skb, int i,
 		desc_cb->reuse_flag = 1;
 	} else if (frag_size <= ring->rx_copybreak) {
 		ret = hns3_handle_rx_copybreak(skb, i, ring, pull_len, desc_cb);
-		if (ret)
-			goto out;
+		if (!ret)
+			return;
 	}
 
 out:
@@ -4061,15 +4131,35 @@ static int hns3_set_gro_and_checksum(struct hns3_enet_ring *ring,
 }
 
 static void hns3_set_rx_skb_rss_type(struct hns3_enet_ring *ring,
-				     struct sk_buff *skb, u32 rss_hash)
+				     struct sk_buff *skb, u32 rss_hash,
+				     u32 l234info, u32 ol_info)
 {
-	struct hnae3_handle *handle = ring->tqp->handle;
-	enum pkt_hash_types rss_type;
+	enum pkt_hash_types rss_type = PKT_HASH_TYPE_NONE;
+	struct net_device *netdev = ring_to_netdev(ring);
+	struct hns3_nic_priv *priv = netdev_priv(netdev);
 
-	if (rss_hash)
-		rss_type = handle->kinfo.rss_type;
-	else
-		rss_type = PKT_HASH_TYPE_NONE;
+	if (test_bit(HNS3_NIC_STATE_RXD_ADV_LAYOUT_ENABLE, &priv->state)) {
+		u32 ptype = hnae3_get_field(ol_info, HNS3_RXD_PTYPE_M,
+					    HNS3_RXD_PTYPE_S);
+
+		rss_type = hns3_rx_ptype_tbl[ptype].hash_type;
+	} else {
+		int l3_type = hnae3_get_field(l234info, HNS3_RXD_L3ID_M,
+					      HNS3_RXD_L3ID_S);
+		int l4_type = hnae3_get_field(l234info, HNS3_RXD_L4ID_M,
+					      HNS3_RXD_L4ID_S);
+
+		if (l3_type == HNS3_L3_TYPE_IPV4 ||
+		    l3_type == HNS3_L3_TYPE_IPV6) {
+			if (l4_type == HNS3_L4_TYPE_UDP ||
+			    l4_type == HNS3_L4_TYPE_TCP ||
+			    l4_type == HNS3_L4_TYPE_SCTP)
+				rss_type = PKT_HASH_TYPE_L4;
+			else if (l4_type == HNS3_L4_TYPE_IGMP ||
+				 l4_type == HNS3_L4_TYPE_ICMP)
+				rss_type = PKT_HASH_TYPE_L3;
+		}
+	}
 
 	skb_set_hash(skb, rss_hash, rss_type);
 }
@@ -4172,7 +4262,8 @@ static int hns3_handle_bdinfo(struct hns3_enet_ring *ring, struct sk_buff *skb)
 
 	ring->tqp_vector->rx_group.total_bytes += len;
 
-	hns3_set_rx_skb_rss_type(ring, skb, le32_to_cpu(desc->rx.rss_hash));
+	hns3_set_rx_skb_rss_type(ring, skb, le32_to_cpu(desc->rx.rss_hash),
+				 l234info, ol_info);
 	return 0;
 }
 
@@ -5091,10 +5182,7 @@ static void hns3_set_cq_period_mode(struct hns3_nic_priv *priv,
 			priv->tqp_vector[i].rx_group.dim.mode = mode;
 	}
 
-	/* only device version above V3(include V3), GL can switch CQ/EQ
-	 * period mode.
-	 */
-	if (ae_dev->dev_version >= HNAE3_DEVICE_VERSION_V3) {
+	if (hnae3_ae_dev_cq_supported(ae_dev)) {
 		u32 new_mode;
 		u64 reg;
 
@@ -5121,6 +5209,9 @@ static void hns3_state_init(struct hnae3_handle *handle)
 	struct hns3_nic_priv *priv = netdev_priv(netdev);
 
 	set_bit(HNS3_NIC_STATE_INITED, &priv->state);
+
+	if (test_bit(HNAE3_DEV_SUPPORT_TX_PUSH_B, ae_dev->caps))
+		set_bit(HNS3_NIC_STATE_TX_PUSH_ENABLE, &priv->state);
 
 	if (ae_dev->dev_version >= HNAE3_DEVICE_VERSION_V3)
 		set_bit(HNAE3_PFLAG_LIMIT_PROMISC, &handle->supported_pflags);

@@ -1243,19 +1243,18 @@ static int ath10k_snoc_napi_poll(struct napi_struct *ctx, int budget)
 static void ath10k_snoc_init_napi(struct ath10k *ar)
 {
 	netif_napi_add(&ar->napi_dev, &ar->napi, ath10k_snoc_napi_poll,
-		       ATH10K_NAPI_BUDGET);
+		       NAPI_POLL_WEIGHT);
 }
 
 static int ath10k_snoc_request_irq(struct ath10k *ar)
 {
 	struct ath10k_snoc *ar_snoc = ath10k_snoc_priv(ar);
-	int irqflags = IRQF_TRIGGER_RISING;
 	int ret, id;
 
 	for (id = 0; id < CE_COUNT_MAX; id++) {
 		ret = request_irq(ar_snoc->ce_irqs[id].irq_line,
-				  ath10k_snoc_per_engine_handler,
-				  irqflags, ce_name[id], ar);
+				  ath10k_snoc_per_engine_handler, 0,
+				  ce_name[id], ar);
 		if (ret) {
 			ath10k_err(ar,
 				   "failed to register IRQ handler for CE %d: %d\n",
@@ -1306,13 +1305,10 @@ static int ath10k_snoc_resource_init(struct ath10k *ar)
 	}
 
 	for (i = 0; i < CE_COUNT; i++) {
-		res = platform_get_resource(ar_snoc->dev, IORESOURCE_IRQ, i);
-		if (!res) {
-			ath10k_err(ar, "failed to get IRQ%d\n", i);
-			ret = -ENODEV;
-			goto out;
-		}
-		ar_snoc->ce_irqs[i].irq_line = res->start;
+		ret = platform_get_irq(ar_snoc->dev, i);
+		if (ret < 0)
+			return ret;
+		ar_snoc->ce_irqs[i].irq_line = ret;
 	}
 
 	ret = device_property_read_u32(&pdev->dev, "qcom,xo-cal-data",
@@ -1323,10 +1319,8 @@ static int ath10k_snoc_resource_init(struct ath10k *ar)
 		ath10k_dbg(ar, ATH10K_DBG_SNOC, "xo cal data %x\n",
 			   ar_snoc->xo_cal_data);
 	}
-	ret = 0;
 
-out:
-	return ret;
+	return 0;
 }
 
 static void ath10k_snoc_quirks_init(struct ath10k *ar)

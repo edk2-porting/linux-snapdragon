@@ -13,7 +13,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of_irq.h>
+#include <linux/property.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
@@ -128,7 +128,8 @@ static int smbalert_probe(struct i2c_client *ara,
 	if (setup) {
 		irq = setup->irq;
 	} else {
-		irq = of_irq_get_byname(adapter->dev.of_node, "smbus_alert");
+		irq = fwnode_irq_get_byname(dev_fwnode(adapter->dev.parent),
+					    "smbus_alert");
 		if (irq <= 0)
 			return irq;
 	}
@@ -390,7 +391,7 @@ void i2c_register_spd(struct i2c_adapter *adap)
 		unsigned short addr_list[2];
 
 		memset(&info, 0, sizeof(struct i2c_board_info));
-		strlcpy(info.type, name, I2C_NAME_SIZE);
+		strscpy(info.type, name, I2C_NAME_SIZE);
 		addr_list[0] = 0x50 + n;
 		addr_list[1] = I2C_CLIENT_END;
 

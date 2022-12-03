@@ -135,9 +135,9 @@ void mark_initmem_nx(void)
 	unsigned long numpages = PFN_UP((unsigned long)_einittext) -
 				 PFN_DOWN((unsigned long)_sinittext);
 
-	if (v_block_mapped((unsigned long)_sinittext)) {
-		mmu_mark_initmem_nx();
-	} else {
+	mmu_mark_initmem_nx();
+
+	if (!v_block_mapped((unsigned long)_sinittext)) {
 		set_memory_nx((unsigned long)_sinittext, numpages);
 		set_memory_rw((unsigned long)_sinittext, numpages);
 	}
@@ -147,6 +147,9 @@ void mark_initmem_nx(void)
 void mark_rodata_ro(void)
 {
 	unsigned long numpages;
+
+	if (IS_ENABLED(CONFIG_STRICT_MODULE_RWX) && mmu_has_feature(MMU_FTR_HPTE_TABLE))
+		pr_warn("This platform has HASH MMU, STRICT_MODULE_RWX won't work\n");
 
 	if (v_block_mapped((unsigned long)_stext + 1)) {
 		mmu_mark_rodata_ro();

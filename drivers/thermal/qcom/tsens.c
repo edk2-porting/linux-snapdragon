@@ -18,6 +18,7 @@
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
+#include "../thermal_hwmon.h"
 #include "tsens.h"
 
 /**
@@ -932,17 +933,6 @@ static int tsens_get_temp(void *data, int *temp)
 	return priv->ops->get_temp(s, temp);
 }
 
-static int tsens_get_trend(void *data, int trip, enum thermal_trend *trend)
-{
-	struct tsens_sensor *s = data;
-	struct tsens_priv *priv = s->priv;
-
-	if (priv->ops->get_trend)
-		return priv->ops->get_trend(s, trend);
-
-	return -ENOTSUPP;
-}
-
 static int  __maybe_unused tsens_suspend(struct device *dev)
 {
 	struct tsens_priv *priv = dev_get_drvdata(dev);
@@ -979,6 +969,9 @@ static const struct of_device_id tsens_table[] = {
 		.compatible = "qcom,msm8939-tsens",
 		.data = &data_8939,
 	}, {
+		.compatible = "qcom,msm8960-tsens",
+		.data = &data_8960,
+	}, {
 		.compatible = "qcom,msm8974-tsens",
 		.data = &data_8974,
 	}, {
@@ -1000,7 +993,6 @@ MODULE_DEVICE_TABLE(of, tsens_table);
 
 static const struct thermal_zone_of_device_ops tsens_of_ops = {
 	.get_temp = tsens_get_temp,
-	.get_trend = tsens_get_trend,
 	.set_trips = tsens_set_trips,
 };
 
@@ -1060,6 +1052,10 @@ static int tsens_register(struct tsens_priv *priv)
 		priv->sensor[i].tzd = tzd;
 		if (priv->ops->enable)
 			priv->ops->enable(priv, i);
+
+		if (devm_thermal_add_hwmon_sysfs(tzd))
+			dev_warn(priv->dev,
+				 "Failed to add hwmon sysfs attributes\n");
 	}
 
 	/* VER_0 require to set MIN and MAX THRESH

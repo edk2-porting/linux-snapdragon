@@ -35,7 +35,6 @@
 #include <asm/syscalls.h>
 #include <asm/time.h>
 #include <asm/unistd.h>
-#include <asm/asm-prototypes.h>
 
 static inline long do_mmap2(unsigned long addr, size_t len,
 			unsigned long prot, unsigned long flags,
@@ -74,7 +73,7 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr, size_t, len,
 int
 ppc_select(int n, fd_set __user *inp, fd_set __user *outp, fd_set __user *exp, struct __kernel_old_timeval __user *tvp)
 {
-	if ( (unsigned long)n >= 4096 )
+	if ((unsigned long)n >= 4096)
 		return sys_old_select((void __user *)n);
 
 	return sys_select(n, inp, outp, exp, tvp);
@@ -99,8 +98,8 @@ long ppc64_personality(unsigned long personality)
 long ppc_fadvise64_64(int fd, int advice, u32 offset_high, u32 offset_low,
 		      u32 len_high, u32 len_low)
 {
-	return ksys_fadvise64_64(fd, (u64)offset_high << 32 | offset_low,
-				 (u64)len_high << 32 | len_low, advice);
+	return ksys_fadvise64_64(fd, merge_64(offset_high, offset_low),
+				 merge_64(len_high, len_low), advice);
 }
 
 SYSCALL_DEFINE0(switch_endian)

@@ -1663,7 +1663,7 @@ void tty_kclose(struct tty_struct *tty)
 	 */
 	tty_ldisc_release(tty);
 
-	/* Wait for pending work before tty destruction commmences */
+	/* Wait for pending work before tty destruction commences */
 	tty_flush_works(tty);
 
 	tty_debug_hangup(tty, "freeing structure\n");
@@ -3088,7 +3088,7 @@ struct tty_struct *alloc_tty_struct(struct tty_driver *driver, int idx)
 {
 	struct tty_struct *tty;
 
-	tty = kzalloc(sizeof(*tty), GFP_KERNEL);
+	tty = kzalloc(sizeof(*tty), GFP_KERNEL_ACCOUNT);
 	if (!tty)
 		return NULL;
 

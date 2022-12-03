@@ -6,6 +6,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/blkdev.h>
 #include <linux/blk-integrity.h>
+#include <linux/memremap.h>
 #include <linux/module.h>
 #include "nvmet.h"
 
@@ -75,6 +76,14 @@ static void nvmet_bdev_ns_enable_integrity(struct nvmet_ns *ns)
 int nvmet_bdev_ns_enable(struct nvmet_ns *ns)
 {
 	int ret;
+
+	/*
+	 * When buffered_io namespace attribute is enabled that means user want
+	 * this block device to be used as a file, so block device can take
+	 * an advantage of cache.
+	 */
+	if (ns->buffered_io)
+		return -ENOTBLK;
 
 	ns->bdev = blkdev_get_by_path(ns->device_path,
 			FMODE_READ | FMODE_WRITE, NULL);
@@ -237,7 +246,8 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 	struct scatterlist *sg;
 	struct blk_plug plug;
 	sector_t sector;
-	int op, i, rc;
+	blk_opf_t opf;
+	int i, rc;
 	struct sg_mapping_iter prot_miter;
 	unsigned int iter_flags;
 	unsigned int total_len = nvmet_rw_data_len(req) + req->metadata_len;
@@ -251,31 +261,31 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 	}
 
 	if (req->cmd->rw.opcode == nvme_cmd_write) {
-		op = REQ_OP_WRITE | REQ_SYNC | REQ_IDLE;
+		opf = REQ_OP_WRITE | REQ_SYNC | REQ_IDLE;
 		if (req->cmd->rw.control & cpu_to_le16(NVME_RW_FUA))
-			op |= REQ_FUA;
+			opf |= REQ_FUA;
 		iter_flags = SG_MITER_TO_SG;
 	} else {
-		op = REQ_OP_READ;
+		opf = REQ_OP_READ;
 		iter_flags = SG_MITER_FROM_SG;
 	}
 
 	if (is_pci_p2pdma_page(sg_page(req->sg)))
-		op |= REQ_NOMERGE;
+		opf |= REQ_NOMERGE;
 
 	sector = nvmet_lba_to_sect(req->ns, req->cmd->rw.slba);
 
 	if (nvmet_use_inline_bvec(req)) {
 		bio = &req->b.inline_bio;
-		bio_init(bio, req->inline_bvec, ARRAY_SIZE(req->inline_bvec));
+		bio_init(bio, req->ns->bdev, req->inline_bvec,
+			 ARRAY_SIZE(req->inline_bvec), opf);
 	} else {
-		bio = bio_alloc(GFP_KERNEL, bio_max_segs(sg_cnt));
+		bio = bio_alloc(req->ns->bdev, bio_max_segs(sg_cnt), opf,
+				GFP_KERNEL);
 	}
-	bio_set_dev(bio, req->ns->bdev);
 	bio->bi_iter.bi_sector = sector;
 	bio->bi_private = req;
 	bio->bi_end_io = nvmet_bio_done;
-	bio->bi_opf = op;
 
 	blk_start_plug(&plug);
 	if (req->metadata_len)
@@ -296,10 +306,9 @@ static void nvmet_bdev_execute_rw(struct nvmet_req *req)
 				}
 			}
 
-			bio = bio_alloc(GFP_KERNEL, bio_max_segs(sg_cnt));
-			bio_set_dev(bio, req->ns->bdev);
+			bio = bio_alloc(req->ns->bdev, bio_max_segs(sg_cnt),
+					opf, GFP_KERNEL);
 			bio->bi_iter.bi_sector = sector;
-			bio->bi_opf = op;
 
 			bio_chain(bio, prev);
 			submit_bio(prev);
@@ -328,11 +337,10 @@ static void nvmet_bdev_execute_flush(struct nvmet_req *req)
 	if (!nvmet_check_transfer_len(req, 0))
 		return;
 
-	bio_init(bio, req->inline_bvec, ARRAY_SIZE(req->inline_bvec));
-	bio_set_dev(bio, req->ns->bdev);
+	bio_init(bio, req->ns->bdev, req->inline_bvec,
+		 ARRAY_SIZE(req->inline_bvec), REQ_OP_WRITE | REQ_PREFLUSH);
 	bio->bi_private = req;
 	bio->bi_end_io = nvmet_bio_done;
-	bio->bi_opf = REQ_OP_WRITE | REQ_PREFLUSH;
 
 	submit_bio(bio);
 }
@@ -353,7 +361,7 @@ static u16 nvmet_bdev_discard_range(struct nvmet_req *req,
 	ret = __blkdev_issue_discard(ns->bdev,
 			nvmet_lba_to_sect(ns, range->slba),
 			le32_to_cpu(range->nlb) << (ns->blksize_shift - 9),
-			GFP_KERNEL, 0, bio);
+			GFP_KERNEL, bio);
 	if (ret && ret != -EOPNOTSUPP) {
 		req->error_slba = le64_to_cpu(range->slba);
 		return errno_to_nvme_status(req, ret);

@@ -250,6 +250,7 @@ struct sfp {
 	struct sfp_eeprom_id id;
 	unsigned int module_power_mW;
 	unsigned int module_t_start_up;
+	bool tx_fault_ignore;
 
 #if IS_ENABLED(CONFIG_HWMON)
 	struct sfp_diag diag;
@@ -471,8 +472,8 @@ static unsigned int sfp_soft_get_state(struct sfp *sfp)
 			state |= SFP_F_TX_FAULT;
 	} else {
 		dev_err_ratelimited(sfp->dev,
-				    "failed to read SFP soft status: %d\n",
-				    ret);
+				    "failed to read SFP soft status: %pe\n",
+				    ERR_PTR(ret));
 		/* Preserve the current state */
 		state = sfp->state;
 	}
@@ -1289,7 +1290,7 @@ static const struct hwmon_chip_info sfp_hwmon_chip_info = {
 static void sfp_hwmon_probe(struct work_struct *work)
 {
 	struct sfp *sfp = container_of(work, struct sfp, hwmon_probe.work);
-	int err, i;
+	int err;
 
 	/* hwmon interface needs to access 16bit registers in atomic way to
 	 * guarantee coherency of the diagnostic monitoring data. If it is not
@@ -1311,20 +1312,17 @@ static void sfp_hwmon_probe(struct work_struct *work)
 			mod_delayed_work(system_wq, &sfp->hwmon_probe,
 					 T_PROBE_RETRY_SLOW);
 		} else {
-			dev_warn(sfp->dev, "hwmon probe failed: %d\n", err);
+			dev_warn(sfp->dev, "hwmon probe failed: %pe\n",
+				 ERR_PTR(err));
 		}
 		return;
 	}
 
-	sfp->hwmon_name = kstrdup(dev_name(sfp->dev), GFP_KERNEL);
-	if (!sfp->hwmon_name) {
+	sfp->hwmon_name = hwmon_sanitize_name(dev_name(sfp->dev));
+	if (IS_ERR(sfp->hwmon_name)) {
 		dev_err(sfp->dev, "out of memory for hwmon name\n");
 		return;
 	}
-
-	for (i = 0; sfp->hwmon_name[i]; i++)
-		if (hwmon_is_bad_char(sfp->hwmon_name[i]))
-			sfp->hwmon_name[i] = '_';
 
 	sfp->hwmon_dev = hwmon_device_register_with_info(sfp->dev,
 							 sfp->hwmon_name, sfp,
@@ -1516,14 +1514,15 @@ static int sfp_sm_probe_phy(struct sfp *sfp, bool is_c45)
 	if (phy == ERR_PTR(-ENODEV))
 		return PTR_ERR(phy);
 	if (IS_ERR(phy)) {
-		dev_err(sfp->dev, "mdiobus scan returned %ld\n", PTR_ERR(phy));
+		dev_err(sfp->dev, "mdiobus scan returned %pe\n", phy);
 		return PTR_ERR(phy);
 	}
 
 	err = phy_device_register(phy);
 	if (err) {
 		phy_device_free(phy);
-		dev_err(sfp->dev, "phy_device_register failed: %d\n", err);
+		dev_err(sfp->dev, "phy_device_register failed: %pe\n",
+			ERR_PTR(err));
 		return err;
 	}
 
@@ -1531,7 +1530,7 @@ static int sfp_sm_probe_phy(struct sfp *sfp, bool is_c45)
 	if (err) {
 		phy_device_remove(phy);
 		phy_device_free(phy);
-		dev_err(sfp->dev, "sfp_add_phy failed: %d\n", err);
+		dev_err(sfp->dev, "sfp_add_phy failed: %pe\n", ERR_PTR(err));
 		return err;
 	}
 
@@ -1708,7 +1707,7 @@ static int sfp_sm_mod_hpower(struct sfp *sfp, bool enable)
 
 	err = sfp_read(sfp, true, SFP_EXT_STATUS, &val, sizeof(val));
 	if (err != sizeof(val)) {
-		dev_err(sfp->dev, "Failed to read EEPROM: %d\n", err);
+		dev_err(sfp->dev, "Failed to read EEPROM: %pe\n", ERR_PTR(err));
 		return -EAGAIN;
 	}
 
@@ -1726,7 +1725,8 @@ static int sfp_sm_mod_hpower(struct sfp *sfp, bool enable)
 
 	err = sfp_write(sfp, true, SFP_EXT_STATUS, &val, sizeof(val));
 	if (err != sizeof(val)) {
-		dev_err(sfp->dev, "Failed to write EEPROM: %d\n", err);
+		dev_err(sfp->dev, "Failed to write EEPROM: %pe\n",
+			ERR_PTR(err));
 		return -EAGAIN;
 	}
 
@@ -1778,7 +1778,9 @@ static int sfp_cotsworks_fixup_check(struct sfp *sfp, struct sfp_eeprom_id *id)
 		id->base.connector = SFF8024_CONNECTOR_LC;
 		err = sfp_write(sfp, false, SFP_PHYS_ID, &id->base, 3);
 		if (err != 3) {
-			dev_err(sfp->dev, "Failed to rewrite module EEPROM: %d\n", err);
+			dev_err(sfp->dev,
+				"Failed to rewrite module EEPROM: %pe\n",
+				ERR_PTR(err));
 			return err;
 		}
 
@@ -1789,7 +1791,9 @@ static int sfp_cotsworks_fixup_check(struct sfp *sfp, struct sfp_eeprom_id *id)
 		check = sfp_check(&id->base, sizeof(id->base) - 1);
 		err = sfp_write(sfp, false, SFP_CC_BASE, &check, 1);
 		if (err != 1) {
-			dev_err(sfp->dev, "Failed to update base structure checksum in fiber module EEPROM: %d\n", err);
+			dev_err(sfp->dev,
+				"Failed to update base structure checksum in fiber module EEPROM: %pe\n",
+				ERR_PTR(err));
 			return err;
 		}
 	}
@@ -1814,12 +1818,13 @@ static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 	ret = sfp_read(sfp, false, 0, &id.base, sizeof(id.base));
 	if (ret < 0) {
 		if (report)
-			dev_err(sfp->dev, "failed to read EEPROM: %d\n", ret);
+			dev_err(sfp->dev, "failed to read EEPROM: %pe\n",
+				ERR_PTR(ret));
 		return -EAGAIN;
 	}
 
 	if (ret != sizeof(id.base)) {
-		dev_err(sfp->dev, "EEPROM short read: %d\n", ret);
+		dev_err(sfp->dev, "EEPROM short read: %pe\n", ERR_PTR(ret));
 		return -EAGAIN;
 	}
 
@@ -1839,13 +1844,15 @@ static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 		ret = sfp_read(sfp, false, 0, &id.base, sizeof(id.base));
 		if (ret < 0) {
 			if (report)
-				dev_err(sfp->dev, "failed to read EEPROM: %d\n",
-					ret);
+				dev_err(sfp->dev,
+					"failed to read EEPROM: %pe\n",
+					ERR_PTR(ret));
 			return -EAGAIN;
 		}
 
 		if (ret != sizeof(id.base)) {
-			dev_err(sfp->dev, "EEPROM short read: %d\n", ret);
+			dev_err(sfp->dev, "EEPROM short read: %pe\n",
+				ERR_PTR(ret));
 			return -EAGAIN;
 		}
 	}
@@ -1887,12 +1894,13 @@ static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 	ret = sfp_read(sfp, false, SFP_CC_BASE + 1, &id.ext, sizeof(id.ext));
 	if (ret < 0) {
 		if (report)
-			dev_err(sfp->dev, "failed to read EEPROM: %d\n", ret);
+			dev_err(sfp->dev, "failed to read EEPROM: %pe\n",
+				ERR_PTR(ret));
 		return -EAGAIN;
 	}
 
 	if (ret != sizeof(id.ext)) {
-		dev_err(sfp->dev, "EEPROM short read: %d\n", ret);
+		dev_err(sfp->dev, "EEPROM short read: %pe\n", ERR_PTR(ret));
 		return -EAGAIN;
 	}
 
@@ -1944,6 +1952,12 @@ static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 		sfp->module_t_start_up = T_START_UP_BAD_GPON;
 	else
 		sfp->module_t_start_up = T_START_UP;
+
+	if (!memcmp(id.base.vendor_name, "HUAWEI          ", 16) &&
+	    !memcmp(id.base.vendor_pn, "MA5671A         ", 16))
+		sfp->tx_fault_ignore = true;
+	else
+		sfp->tx_fault_ignore = false;
 
 	return 0;
 }
@@ -2046,7 +2060,8 @@ static void sfp_sm_module(struct sfp *sfp, unsigned int event)
 
 		err = sfp_hwmon_insert(sfp);
 		if (err)
-			dev_warn(sfp->dev, "hwmon probe failed: %d\n", err);
+			dev_warn(sfp->dev, "hwmon probe failed: %pe\n",
+				 ERR_PTR(err));
 
 		sfp_sm_mod_next(sfp, SFP_MOD_WAITDEV, 0);
 		fallthrough;
@@ -2397,7 +2412,10 @@ static void sfp_check_state(struct sfp *sfp)
 	mutex_lock(&sfp->st_mutex);
 	state = sfp_get_state(sfp);
 	changed = state ^ sfp->state;
-	changed &= SFP_F_PRESENT | SFP_F_LOS | SFP_F_TX_FAULT;
+	if (sfp->tx_fault_ignore)
+		changed &= SFP_F_PRESENT | SFP_F_LOS;
+	else
+		changed &= SFP_F_PRESENT | SFP_F_LOS | SFP_F_TX_FAULT;
 
 	for (i = 0; i < GPIO_MAX; i++)
 		if (changed & BIT(i))
@@ -2494,7 +2512,7 @@ static int sfp_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, sfp);
 
-	err = devm_add_action(sfp->dev, sfp_cleanup, sfp);
+	err = devm_add_action_or_reset(sfp->dev, sfp_cleanup, sfp);
 	if (err < 0)
 		return err;
 

@@ -18,6 +18,8 @@
 #define ENETC_MAX_MTU		(ENETC_MAC_MAXFRM_SIZE - \
 				(ETH_FCS_LEN + ETH_HLEN + VLAN_HLEN))
 
+#define ENETC_CBD_DATA_MEM_ALIGN 64
+
 struct enetc_tx_swbd {
 	union {
 		struct sk_buff *skb;
@@ -34,6 +36,7 @@ struct enetc_tx_swbd {
 	u8 is_eof:1;
 	u8 is_xdp_tx:1;
 	u8 is_xdp_redirect:1;
+	u8 qbv_en:1;
 };
 
 #define ENETC_RX_MAXFRM_SIZE	ENETC_MAC_MAXFRM_SIZE
@@ -70,6 +73,7 @@ struct enetc_ring_stats {
 	unsigned int xdp_redirect_sg;
 	unsigned int recycles;
 	unsigned int recycle_failures;
+	unsigned int win_drop;
 };
 
 struct enetc_xdp_data {
@@ -389,11 +393,9 @@ void enetc_start(struct net_device *ndev);
 void enetc_stop(struct net_device *ndev);
 netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev);
 struct net_device_stats *enetc_get_stats(struct net_device *ndev);
-int enetc_set_features(struct net_device *ndev,
-		       netdev_features_t features);
+void enetc_set_features(struct net_device *ndev, netdev_features_t features);
 int enetc_ioctl(struct net_device *ndev, struct ifreq *rq, int cmd);
-int enetc_setup_tc(struct net_device *ndev, enum tc_setup_type type,
-		   void *type_data);
+int enetc_setup_tc_mqprio(struct net_device *ndev, void *type_data);
 int enetc_setup_bpf(struct net_device *dev, struct netdev_bpf *xdp);
 int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 		   struct xdp_frame **frames, u32 flags);
@@ -415,6 +417,42 @@ int enetc_get_rss_table(struct enetc_si *si, u32 *table, int count);
 int enetc_set_rss_table(struct enetc_si *si, const u32 *table, int count);
 int enetc_send_cmd(struct enetc_si *si, struct enetc_cbd *cbd);
 
+static inline void *enetc_cbd_alloc_data_mem(struct enetc_si *si,
+					     struct enetc_cbd *cbd,
+					     int size, dma_addr_t *dma,
+					     void **data_align)
+{
+	struct enetc_cbdr *ring = &si->cbd_ring;
+	dma_addr_t dma_align;
+	void *data;
+
+	data = dma_alloc_coherent(ring->dma_dev,
+				  size + ENETC_CBD_DATA_MEM_ALIGN,
+				  dma, GFP_KERNEL);
+	if (!data) {
+		dev_err(ring->dma_dev, "CBD alloc data memory failed!\n");
+		return NULL;
+	}
+
+	dma_align = ALIGN(*dma, ENETC_CBD_DATA_MEM_ALIGN);
+	*data_align = PTR_ALIGN(data, ENETC_CBD_DATA_MEM_ALIGN);
+
+	cbd->addr[0] = cpu_to_le32(lower_32_bits(dma_align));
+	cbd->addr[1] = cpu_to_le32(upper_32_bits(dma_align));
+	cbd->length = cpu_to_le16(size);
+
+	return data;
+}
+
+static inline void enetc_cbd_free_data_mem(struct enetc_si *si, int size,
+					   void *data, dma_addr_t *dma)
+{
+	struct enetc_cbdr *ring = &si->cbd_ring;
+
+	dma_free_coherent(ring->dma_dev, size + ENETC_CBD_DATA_MEM_ALIGN,
+			  data, *dma);
+}
+
 #ifdef CONFIG_FSL_ENETC_QOS
 int enetc_setup_tc_taprio(struct net_device *ndev, void *type_data);
 void enetc_sched_speed_set(struct enetc_ndev_priv *priv, int speed);
@@ -425,6 +463,7 @@ int enetc_setup_tc_block_cb(enum tc_setup_type type, void *type_data,
 int enetc_setup_tc_psfp(struct net_device *ndev, void *type_data);
 int enetc_psfp_init(struct enetc_ndev_priv *priv);
 int enetc_psfp_clean(struct enetc_ndev_priv *priv);
+int enetc_set_psfp(struct net_device *ndev, bool en);
 
 static inline void enetc_get_max_cap(struct enetc_ndev_priv *priv)
 {
@@ -497,6 +536,11 @@ static inline int enetc_psfp_enable(struct enetc_ndev_priv *priv)
 }
 
 static inline int enetc_psfp_disable(struct enetc_ndev_priv *priv)
+{
+	return 0;
+}
+
+static inline int enetc_set_psfp(struct net_device *ndev, bool en)
 {
 	return 0;
 }

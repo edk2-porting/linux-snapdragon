@@ -24,10 +24,10 @@ struct ltc2496_driverdata {
 	struct spi_device *spi;
 
 	/*
-	 * DMA (thus cache coherency maintenance) requires the
+	 * DMA (thus cache coherency maintenance) may require the
 	 * transfer buffers to live in their own cache lines.
 	 */
-	unsigned char rxbuf[3] ____cacheline_aligned;
+	unsigned char rxbuf[3] __aligned(IIO_DMA_MINALIGN);
 	unsigned char txbuf[3];
 };
 
@@ -78,13 +78,11 @@ static int ltc2496_probe(struct spi_device *spi)
 	return ltc2497core_probe(dev, indio_dev);
 }
 
-static int ltc2496_remove(struct spi_device *spi)
+static void ltc2496_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 
 	ltc2497core_remove(indio_dev);
-
-	return 0;
 }
 
 static const struct of_device_id ltc2496_of_match[] = {

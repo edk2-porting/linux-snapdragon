@@ -79,6 +79,11 @@ Description:
 		* "accel-base"
 		* "accel-display"
 
+		For devices where an accelerometer is housed in the swivel camera subassembly
+		(for AR application), the following standardized label is used:
+
+		* "accel-camera"
+
 What:		/sys/bus/iio/devices/iio:deviceX/current_timestamp_clock
 KernelVersion:	4.5
 Contact:	linux-iio@vger.kernel.org
@@ -101,6 +106,9 @@ Description:
 		direct access interfaces, it may be found in any of the
 		relevant directories.  If it affects all of the above
 		then it is to be found in the base device directory.
+
+		The stm32-timer-trigger has the additional characteristic that
+		a sampling_frequency of 0 is defined to stop sampling.
 
 What:		/sys/bus/iio/devices/iio:deviceX/sampling_frequency_available
 What:		/sys/bus/iio/devices/iio:deviceX/in_intensity_sampling_frequency_available
@@ -188,7 +196,7 @@ Description:
 		Raw capacitance measurement from channel Y. Units after
 		application of scale and offset are nanofarads.
 
-What:		/sys/.../iio:deviceX/in_capacitanceY-in_capacitanceZ_raw
+What:		/sys/.../iio:deviceX/in_capacitanceY-capacitanceZ_raw
 KernelVersion:	3.2
 Contact:	linux-iio@vger.kernel.org
 Description:
@@ -476,6 +484,7 @@ What:		/sys/bus/iio/devices/iio:deviceX/in_voltageY_i_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_voltageY_q_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_voltage_i_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_voltage_q_calibscale
+What:		/sys/bus/iio/devices/iio:deviceX/in_altvoltage_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_voltage_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_accel_x_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_accel_y_calibscale
@@ -1213,6 +1222,32 @@ Description:
 		number or direction is not specified, applies to all channels of
 		this type.
 
+What:		/sys/.../iio:deviceX/events/in_accel_mag_referenced_en
+What:		/sys/.../iio:deviceX/events/in_accel_mag_referenced_rising_en
+What:		/sys/.../iio:deviceX/events/in_accel_mag_referenced_falling_en
+What:		/sys/.../iio:deviceX/events/in_accel_y_mag_referenced_en
+What:		/sys/.../iio:deviceX/events/in_accel_y_mag_referenced_rising_en
+What:		/sys/.../iio:deviceX/events/in_accel_y_mag_referenced_falling_en
+KernelVersion:	5.18
+Contact:	linux-iio@vger.kernel.org
+Description:
+		Similar to in_accel_mag[_y][_rising|_falling]_en, but the event
+		value is relative to a reference magnitude. The reference magnitude
+		includes the graviational acceleration.
+
+What:		/sys/.../iio:deviceX/events/in_accel_mag_referenced_value
+What:		/sys/.../iio:deviceX/events/in_accel_mag_referenced_rising_value
+What:		/sys/.../iio:deviceX/events/in_accel_mag_referenced_falling_value
+What:		/sys/.../iio:deviceX/events/in_accel_y_mag_referenced_value
+What:		/sys/.../iio:deviceX/events/in_accel_y_mag_referenced_rising_value
+What:		/sys/.../iio:deviceX/events/in_accel_y_mag_referenced_falling_value
+KernelVersion:	5.18
+Contact:	linux-iio@vger.kernel.org
+Description:
+		The value to which the reference magnitude of the channel is
+		compared. If the axis is not specified, it applies to all channels
+		of this type.
+
 What:		/sys/.../events/in_steps_change_en
 KernelVersion:	4.0
 Contact:	linux-iio@vger.kernel.org
@@ -1251,6 +1286,10 @@ Contact:	linux-iio@vger.kernel.org
 Description:
 		Actually start the buffer capture up.  Will start trigger
 		if first device and appropriate.
+
+		Note that it might be impossible to configure other attributes,
+		(e.g.: events, scale, sampling rate) if they impact the currently
+		active buffer capture session.
 
 What:		/sys/bus/iio/devices/iio:deviceX/bufferY
 KernelVersion:	5.11

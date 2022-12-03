@@ -41,6 +41,7 @@
  * By default, CONFIG_PAGE_OFFSET value corresponds to SV48 address space so
  * define the PAGE_OFFSET value for SV39.
  */
+#define PAGE_OFFSET_L4		_AC(0xffffaf8000000000, UL)
 #define PAGE_OFFSET_L3		_AC(0xffffffd800000000, UL)
 #else
 #define PAGE_OFFSET		_AC(CONFIG_PAGE_OFFSET, UL)
@@ -166,7 +167,6 @@ extern phys_addr_t __phys_addr_symbol(unsigned long x);
 #define page_to_virt(page)	(pfn_to_virt(page_to_pfn(page)))
 
 #define page_to_phys(page)	(pfn_to_phys(page_to_pfn(page)))
-#define page_to_bus(page)	(page_to_phys(page))
 #define phys_to_page(paddr)	(pfn_to_page(phys_to_pfn(paddr)))
 
 #define sym_to_pfn(x)           __phys_to_pfn(__pa_symbol(x))

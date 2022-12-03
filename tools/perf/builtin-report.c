@@ -71,7 +71,13 @@ struct report {
 	struct perf_tool	tool;
 	struct perf_session	*session;
 	struct evswitch		evswitch;
-	bool			use_tui, use_gtk, use_stdio;
+#ifdef HAVE_SLANG_SUPPORT
+	bool			use_tui;
+#endif
+#ifdef HAVE_GTK2_SUPPORT
+	bool			use_gtk;
+#endif
+	bool			use_stdio;
 	bool			show_full_info;
 	bool			show_threads;
 	bool			inverted_callchain;
@@ -1220,8 +1226,12 @@ int cmd_report(int argc, const char **argv)
 		    "Show per-thread event counters"),
 	OPT_STRING(0, "pretty", &report.pretty_printing_style, "key",
 		   "pretty printing style key: normal raw"),
+#ifdef HAVE_SLANG_SUPPORT
 	OPT_BOOLEAN(0, "tui", &report.use_tui, "Use the TUI interface"),
+#endif
+#ifdef HAVE_GTK2_SUPPORT
 	OPT_BOOLEAN(0, "gtk", &report.use_gtk, "Use the GTK2 interface"),
+#endif
 	OPT_BOOLEAN(0, "stdio", &report.use_stdio,
 		    "Use the stdio interface"),
 	OPT_BOOLEAN(0, "header", &report.header, "Show data header."),
@@ -1506,10 +1516,14 @@ repeat:
 
 	if (report.use_stdio)
 		use_browser = 0;
+#ifdef HAVE_SLANG_SUPPORT
 	else if (report.use_tui)
 		use_browser = 1;
+#endif
+#ifdef HAVE_GTK2_SUPPORT
 	else if (report.use_gtk)
 		use_browser = 2;
+#endif
 
 	/* Force tty output for header output and per-thread stat. */
 	if (report.header || report.header_only || report.show_threads)

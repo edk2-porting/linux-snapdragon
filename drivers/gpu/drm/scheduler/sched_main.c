@@ -419,6 +419,8 @@ void drm_sched_stop(struct drm_gpu_scheduler *sched, struct drm_sched_job *bad)
 		if (s_job->s_fence->parent &&
 		    dma_fence_remove_callback(s_job->s_fence->parent,
 					      &s_job->cb)) {
+			dma_fence_put(s_job->s_fence->parent);
+			s_job->s_fence->parent = NULL;
 			atomic_dec(&sched->hw_rq_count);
 		} else {
 			/*
@@ -491,7 +493,7 @@ void drm_sched_start(struct drm_gpu_scheduler *sched, bool full_recovery)
 			if (r == -ENOENT)
 				drm_sched_job_done(s_job);
 			else if (r)
-				DRM_ERROR("fence add callback failed (%d)\n",
+				DRM_DEV_ERROR(sched->dev, "fence add callback failed (%d)\n",
 					  r);
 		} else
 			drm_sched_job_done(s_job);
@@ -548,7 +550,6 @@ void drm_sched_resubmit_jobs_ext(struct drm_gpu_scheduler *sched, int max)
 		if (found_guilty && s_job->s_fence->scheduled.context == guilty_context)
 			dma_fence_set_error(&s_fence->finished, -ECANCELED);
 
-		dma_fence_put(s_job->s_fence->parent);
 		fence = sched->ops->run_job(s_job);
 		i++;
 
@@ -558,7 +559,11 @@ void drm_sched_resubmit_jobs_ext(struct drm_gpu_scheduler *sched, int max)
 
 			s_job->s_fence->parent = NULL;
 		} else {
-			s_job->s_fence->parent = fence;
+
+			s_job->s_fence->parent = dma_fence_get(fence);
+
+			/* Drop for orignal kref_init */
+			dma_fence_put(fence);
 		}
 	}
 }
@@ -703,7 +708,10 @@ int drm_sched_job_add_implicit_dependencies(struct drm_sched_job *job,
 	struct dma_fence *fence;
 	int ret;
 
-	dma_resv_for_each_fence(&cursor, obj->resv, write, fence) {
+	dma_resv_assert_held(obj->resv);
+
+	dma_resv_for_each_fence(&cursor, obj->resv, dma_resv_usage_rw(write),
+				fence) {
 		/* Make sure to grab an additional ref on the added fence */
 		dma_fence_get(fence);
 		ret = drm_sched_job_add_dependency(job, fence);
@@ -952,14 +960,16 @@ static int drm_sched_main(void *param)
 
 		if (!IS_ERR_OR_NULL(fence)) {
 			s_fence->parent = dma_fence_get(fence);
+			/* Drop for original kref_init of the fence */
+			dma_fence_put(fence);
+
 			r = dma_fence_add_callback(fence, &sched_job->cb,
 						   drm_sched_job_done_cb);
 			if (r == -ENOENT)
 				drm_sched_job_done(sched_job);
 			else if (r)
-				DRM_ERROR("fence add callback failed (%d)\n",
+				DRM_DEV_ERROR(sched->dev, "fence add callback failed (%d)\n",
 					  r);
-			dma_fence_put(fence);
 		} else {
 			if (IS_ERR(fence))
 				dma_fence_set_error(&s_fence->finished, PTR_ERR(fence));
@@ -991,7 +1001,7 @@ int drm_sched_init(struct drm_gpu_scheduler *sched,
 		   const struct drm_sched_backend_ops *ops,
 		   unsigned hw_submission, unsigned hang_limit,
 		   long timeout, struct workqueue_struct *timeout_wq,
-		   atomic_t *score, const char *name)
+		   atomic_t *score, const char *name, struct device *dev)
 {
 	int i, ret;
 	sched->ops = ops;
@@ -1001,6 +1011,7 @@ int drm_sched_init(struct drm_gpu_scheduler *sched,
 	sched->timeout_wq = timeout_wq ? : system_wq;
 	sched->hang_limit = hang_limit;
 	sched->score = score ? score : &sched->_score;
+	sched->dev = dev;
 	for (i = DRM_SCHED_PRIORITY_MIN; i < DRM_SCHED_PRIORITY_COUNT; i++)
 		drm_sched_rq_init(sched, &sched->sched_rq[i]);
 
@@ -1018,7 +1029,7 @@ int drm_sched_init(struct drm_gpu_scheduler *sched,
 	if (IS_ERR(sched->thread)) {
 		ret = PTR_ERR(sched->thread);
 		sched->thread = NULL;
-		DRM_ERROR("Failed to create scheduler for %s.\n", name);
+		DRM_DEV_ERROR(sched->dev, "Failed to create scheduler for %s.\n", name);
 		return ret;
 	}
 

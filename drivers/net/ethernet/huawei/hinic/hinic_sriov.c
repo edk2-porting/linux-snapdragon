@@ -852,12 +852,6 @@ int hinic_ndo_set_vf_bw(struct net_device *netdev,
 		return -EINVAL;
 	}
 
-	if (max_tx_rate < min_tx_rate) {
-		netif_err(nic_dev, drv, netdev, "Max rate %d must be greater than or equal to min rate %d\n",
-			  max_tx_rate, min_tx_rate);
-		return -EINVAL;
-	}
-
 	err = hinic_port_link_state(nic_dev, &link_state);
 	if (err) {
 		netif_err(nic_dev, drv, netdev,
@@ -1181,7 +1175,6 @@ int hinic_vf_func_init(struct hinic_hwdev *hwdev)
 			dev_err(&hwdev->hwif->pdev->dev,
 				"Failed to register VF, err: %d, status: 0x%x, out size: 0x%x\n",
 				err, register_info.status, out_size);
-			hinic_unregister_vf_mbox_cb(hwdev, HINIC_MOD_L2NIC);
 			return -EIO;
 		}
 	} else {

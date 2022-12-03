@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Galaxy Book 2
+ * Samsung Galaxy Book2
+ *
  * Copyright (c) 2022, Xilin Wu <strongtz@yeah.net>
  */
 
 /dts-v1/;
 
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/input/gpio-keys.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
 #include "sdm850.dtsi"
 #include "pm8998.dtsi"
 
@@ -28,9 +32,10 @@
 /delete-node/ &cdsp_mem;
 /delete-node/ &venus_mem;
 /delete-node/ &mba_region;
+/delete-node/ &spss_mem;
 
 / {
-	model = "Galaxy Book 2";
+	model = "Samsung Galaxy Book2";
 	compatible = "samsung,w737", "qcom,sdm845";
 	chassis-type = "convertible";
 
@@ -39,7 +44,7 @@
 		#size-cells = <2>;
 		ranges;
 
-		// xbl initialized the display at 1280p instead of 1440p
+		// Firmware initialized the display at 1280p instead of 1440p
 		framebuffer0: framebuffer@80400000 {
 			compatible = "simple-framebuffer";
 			reg = <0 0x80400000 0 (1920 * 1280 * 4)>;
@@ -124,6 +129,11 @@
 			reg = <0 0x98d00000 0 0x200000>;
 			no-map;
 		};
+
+		spss_mem: memory@98f00000 {
+			reg = <0 0x98f00000 0 0x100000>;
+			no-map;
+		};
 	};
 
 	sn65dsi86_refclk: sn65dsi86-refclk {
@@ -136,7 +146,7 @@
 
 &adsp_pas {
 	firmware-name = "qcom/samsung/w737/qcadsp850.mbn";
-	status = "disabled";
+	status = "okay";
 };
 
 &apps_rsc {
@@ -348,7 +358,7 @@
 
 &cdsp_pas {
 	firmware-name = "qcom/samsung/w737/qccdsp850.mbn";
-	status = "disabled";
+	status = "okay";
 };
 
 &dsi0 {
@@ -511,8 +521,9 @@
 };
 
 &ipa {
-	status = "disabled";
+	status = "okay";
 	memory-region = <&ipa_fw_mem>;
+	firmware-name = "qcom/samsung/w737/ipa_fws.elf";
 };
 
 /* No idea why it causes an SError when enabled */
@@ -520,13 +531,8 @@
 	status = "disabled";
 };
 
-/* eDP bridge not working */
-&mdss {
-	status = "disabled";
-};
-
 &mss_pil {
-	status = "disabled";
+	status = "okay";
 	firmware-name = "qcom/samsung/w737/qcdsp1v2850.mbn", "qcom/samsung/w737/qcdsp2850.mbn";
 };
 
@@ -580,6 +586,100 @@
 
 &qupv3_id_1 {
 	status = "okay";
+};
+
+&q6asmdai {
+	dai@0 {
+		reg = <0>;
+	};
+
+	dai@1 {
+		reg = <1>;
+	};
+
+	dai@2 {
+		reg = <2>;
+	};
+};
+
+&sound {
+	compatible = "qcom,sdm845-sndcard";
+	model = "Samsung-W737";
+
+	audio-routing =
+		"RX_BIAS", "MCLK",
+		"AMIC2", "MIC BIAS2",
+		"SpkrLeft IN", "SPK1 OUT",
+		"SpkrRight IN", "SPK2 OUT",
+		"MM_DL1",  "MultiMedia1 Playback",
+		"MM_DL3",  "MultiMedia3 Playback",
+		"MultiMedia2 Capture", "MM_UL2";
+
+	mm1-dai-link {
+		link-name = "MultiMedia1";
+		cpu {
+			sound-dai = <&q6asmdai  MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		};
+	};
+
+	mm2-dai-link {
+		link-name = "MultiMedia2";
+		cpu {
+			sound-dai = <&q6asmdai  MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		};
+	};
+
+	mm3-dai-link {
+		link-name = "MultiMedia3";
+		cpu {
+			sound-dai = <&q6asmdai  MSM_FRONTEND_DAI_MULTIMEDIA3>;
+		};
+	};
+
+	slim-dai-link {
+		link-name = "SLIM Playback";
+		cpu {
+			sound-dai = <&q6afedai SLIMBUS_0_RX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&left_spkr>, <&right_spkr>, <&swm 0>, <&wcd9340 0>;
+		};
+	};
+
+	slimcap-dai-link {
+		link-name = "SLIM Capture";
+		cpu {
+			sound-dai = <&q6afedai SLIMBUS_0_TX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&wcd9340 1>;
+		};
+	};
+
+	slim-wcd-dai-link {
+		link-name = "SLIM WCD Playback";
+		cpu {
+			sound-dai = <&q6afedai SLIMBUS_1_RX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&wcd9340 2>;
+		};
+	};
 };
 
 &tlmm {
@@ -665,10 +765,19 @@
 			output-high;
 		};
 	};
+
+	wcd_intr_default: wcd_intr_default {
+		pins = "gpio54";
+		function = "gpio";
+
+		input-enable;
+		bias-pull-down;
+		drive-strength = <2>;
+	};
 };
 
 &uart6 {
-	status = "disabled";
+	status = "okay";
 
 	bluetooth {
 		compatible = "qcom,wcn3990-bt";
@@ -702,9 +811,8 @@
 	status = "okay";
 };
 
-/* For debugging */
 &usb_1_dwc3 {
-	dr_mode = "peripheral";
+	dr_mode = "host";
 };
 
 &usb_1_hsphy {
@@ -731,7 +839,6 @@
 	status = "okay";
 };
 
-/* For connecting USB devices */
 &usb_2_dwc3 {
 	dr_mode = "host";
 };
@@ -755,11 +862,48 @@
 };
 
 &venus {
-	status = "disabled";
+	status = "okay";
+	firmware-name = "qcom/samsung/w737/qcvss850.mbn";
+};
+
+&wcd9340{
+	pinctrl-0 = <&wcd_intr_default>;
+	pinctrl-names = "default";
+	clock-names = "extclk";
+	clocks = <&rpmhcc RPMH_LN_BB_CLK2>;
+	reset-gpios = <&tlmm 64 0>;
+	vdd-buck-supply = <&vreg_s4a_1p8>;
+	vdd-buck-sido-supply = <&vreg_s4a_1p8>;
+	vdd-tx-supply = <&vreg_s4a_1p8>;
+	vdd-rx-supply = <&vreg_s4a_1p8>;
+	vdd-io-supply = <&vreg_s4a_1p8>;
+	qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000 500000 500000 500000 500000>;
+	qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
+	qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
+
+	swm: swm@c85 {
+		left_spkr: wsa8810-left{
+			compatible = "sdw10217211000";
+			reg = <0 3>;
+			powerdown-gpios = <&wcdgpio 1 GPIO_ACTIVE_HIGH>;
+			#thermal-sensor-cells = <0>;
+			sound-name-prefix = "SpkrLeft";
+			#sound-dai-cells = <0>;
+		};
+
+		right_spkr: wsa8810-right{
+			compatible = "sdw10217211000";
+			powerdown-gpios = <&wcdgpio 2 GPIO_ACTIVE_HIGH>;
+			reg = <0 4>;
+			#thermal-sensor-cells = <0>;
+			sound-name-prefix = "SpkrRight";
+			#sound-dai-cells = <0>;
+		};
+	};
 };
 
 &wifi {
-	status = "disabled";
+	status = "okay";
 
 	vdd-0.8-cx-mx-supply = <&vreg_l5a_0p8>;
 	vdd-1.8-xo-supply = <&vreg_l7a_1p8>;

@@ -22,6 +22,7 @@
 #include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_managed.h>
@@ -411,14 +412,12 @@ static int ili9225_probe(struct spi_device *spi)
 	return 0;
 }
 
-static int ili9225_remove(struct spi_device *spi)
+static void ili9225_remove(struct spi_device *spi)
 {
 	struct drm_device *drm = spi_get_drvdata(spi);
 
 	drm_dev_unplug(drm);
 	drm_atomic_helper_shutdown(drm);
-
-	return 0;
 }
 
 static void ili9225_shutdown(struct spi_device *spi)

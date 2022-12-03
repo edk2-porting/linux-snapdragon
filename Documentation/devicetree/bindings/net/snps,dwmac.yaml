@@ -65,6 +65,8 @@ properties:
         - ingenic,x2000-mac
         - loongson,ls2k-dwmac
         - loongson,ls7a-dwmac
+        - renesas,r9a06g032-gmac
+        - renesas,rzn1-gmac
         - rockchip,px30-gmac
         - rockchip,rk3128-gmac
         - rockchip,rk3228-gmac
@@ -134,6 +136,9 @@ properties:
 
   reset-names:
     const: stmmaceth
+
+  power-domains:
+    maxItems: 1
 
   mac-mode:
     $ref: ethernet-controller.yaml#/properties/phy-connection-type
@@ -338,21 +343,21 @@ allOf:
           description:
             Programmable Burst Length (tx and rx)
           $ref: /schemas/types.yaml#/definitions/uint32
-          enum: [2, 4, 8]
+          enum: [1, 2, 4, 8, 16, 32]
 
         snps,txpbl:
           description:
             Tx Programmable Burst Length. If set, DMA tx will use this
             value rather than snps,pbl.
           $ref: /schemas/types.yaml#/definitions/uint32
-          enum: [2, 4, 8]
+          enum: [1, 2, 4, 8, 16, 32]
 
         snps,rxpbl:
           description:
             Rx Programmable Burst Length. If set, DMA rx will use this
             value rather than snps,pbl.
           $ref: /schemas/types.yaml#/definitions/uint32
-          enum: [2, 4, 8]
+          enum: [1, 2, 4, 8, 16, 32]
 
         snps,no-pbl-x8:
           $ref: /schemas/types.yaml#/definitions/flag

@@ -219,16 +219,6 @@ system_call_vectored common 0x3000
  */
 system_call_vectored sigill 0x7ff0
 
-
-/*
- * Entered via kernel return set up by kernel/sstep.c, must match entry regs
- */
-	.globl system_call_vectored_emulate
-system_call_vectored_emulate:
-_ASM_NOKPROBE_SYMBOL(system_call_vectored_emulate)
-	li	r10,IRQS_ALL_DISABLED
-	stb	r10,PACAIRQSOFTMASK(r13)
-	b	system_call_vectored_common
 #endif /* CONFIG_PPC_BOOK3S */
 
 	.balign IFETCH_ALIGN_BYTES
@@ -569,15 +559,63 @@ _ASM_NOKPROBE_SYMBOL(interrupt_return_\srr\()_kernel)
 	ld	r11,SOFTE(r1)
 	cmpwi	r11,IRQS_ENABLED
 	stb	r11,PACAIRQSOFTMASK(r13)
-	bne	1f
+	beq	.Linterrupt_return_\srr\()_soft_enabled
+
+	/*
+	 * Returning to soft-disabled context.
+	 * Check if a MUST_HARD_MASK interrupt has become pending, in which
+	 * case we need to disable MSR[EE] in the return context.
+	 *
+	 * The MSR[EE] check catches among other things the short incoherency
+	 * in hard_irq_disable() between clearing MSR[EE] and setting
+	 * PACA_IRQ_HARD_DIS.
+	 */
+	ld	r12,_MSR(r1)
+	andi.	r10,r12,MSR_EE
+	beq	.Lfast_kernel_interrupt_return_\srr\() // EE already disabled
+	lbz	r11,PACAIRQHAPPENED(r13)
+	andi.	r10,r11,PACA_IRQ_MUST_HARD_MASK
+	bne	1f // HARD_MASK is pending
+	// No HARD_MASK pending, clear possible HARD_DIS set by interrupt
+	andi.	r11,r11,(~PACA_IRQ_HARD_DIS)@l
+	stb	r11,PACAIRQHAPPENED(r13)
+	b	.Lfast_kernel_interrupt_return_\srr\()
+
+
+1:	/* Must clear MSR_EE from _MSR */
+#ifdef CONFIG_PPC_BOOK3S
+	li	r10,0
+	/* Clear valid before changing _MSR */
+	.ifc \srr,srr
+	stb	r10,PACASRR_VALID(r13)
+	.else
+	stb	r10,PACAHSRR_VALID(r13)
+	.endif
+#endif
+	xori	r12,r12,MSR_EE
+	std	r12,_MSR(r1)
+	b	.Lfast_kernel_interrupt_return_\srr\()
+
+.Linterrupt_return_\srr\()_soft_enabled:
+	/*
+	 * In the soft-enabled case, need to double-check that we have no
+	 * pending interrupts that might have come in before we reached the
+	 * restart section of code, and restart the exit so those can be
+	 * handled.
+	 *
+	 * If there are none, it is be possible that the interrupt still
+	 * has PACA_IRQ_HARD_DIS set, which needs to be cleared for the
+	 * interrupted context. This clear will not clobber a new pending
+	 * interrupt coming in, because we're in the restart section, so
+	 * such would return to the restart location.
+	 */
 #ifdef CONFIG_PPC_BOOK3S
 	lbz	r11,PACAIRQHAPPENED(r13)
 	andi.	r11,r11,(~PACA_IRQ_HARD_DIS)@l
 	bne-	interrupt_return_\srr\()_kernel_restart
 #endif
 	li	r11,0
-	stb	r11,PACAIRQHAPPENED(r13) # clear out possible HARD_DIS
-1:
+	stb	r11,PACAIRQHAPPENED(r13) // clear the possible HARD_DIS
 
 .Lfast_kernel_interrupt_return_\srr\():
 	cmpdi	cr1,r3,0
@@ -721,7 +759,7 @@ _GLOBAL(ret_from_kernel_thread)
 	REST_NVGPRS(r1)
 	mtctr	r14
 	mr	r3,r15
-#ifdef PPC64_ELF_ABI_v2
+#ifdef CONFIG_PPC64_ELF_ABI_V2
 	mr	r12,r14
 #endif
 	bctrl

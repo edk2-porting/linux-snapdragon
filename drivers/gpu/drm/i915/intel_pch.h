@@ -22,10 +22,8 @@ enum intel_pch {
 	PCH_LPT,	/* Lynxpoint/Wildcatpoint PCH */
 	PCH_SPT,        /* Sunrisepoint/Kaby Lake PCH */
 	PCH_CNP,        /* Cannon/Comet Lake PCH */
-	PCH_ICP,	/* Ice Lake PCH */
-	PCH_JSP,	/* Jasper Lake PCH */
-	PCH_MCC,        /* Mule Creek Canyon PCH */
-	PCH_TGP,	/* Tiger Lake PCH */
+	PCH_ICP,	/* Ice Lake/Jasper Lake PCH */
+	PCH_TGP,	/* Tiger Lake/Mule Creek Canyon PCH */
 	PCH_ADP,	/* Alder Lake PCH */
 
 	/* Fake PCHs, functionality handled on the same PCI dev */
@@ -58,6 +56,7 @@ enum intel_pch {
 #define INTEL_PCH_ADP_DEVICE_ID_TYPE		0x7A80
 #define INTEL_PCH_ADP2_DEVICE_ID_TYPE		0x5180
 #define INTEL_PCH_ADP3_DEVICE_ID_TYPE		0x7A00
+#define INTEL_PCH_ADP4_DEVICE_ID_TYPE		0x5480
 #define INTEL_PCH_P2X_DEVICE_ID_TYPE		0x7100
 #define INTEL_PCH_P3X_DEVICE_ID_TYPE		0x7000
 #define INTEL_PCH_QEMU_DEVICE_ID_TYPE		0x2900 /* qemu q35 has 2918 */
@@ -67,8 +66,6 @@ enum intel_pch {
 #define HAS_PCH_DG2(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_DG2)
 #define HAS_PCH_ADP(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_ADP)
 #define HAS_PCH_DG1(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_DG1)
-#define HAS_PCH_JSP(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_JSP)
-#define HAS_PCH_MCC(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_MCC)
 #define HAS_PCH_TGP(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_TGP)
 #define HAS_PCH_ICP(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_ICP)
 #define HAS_PCH_CNP(dev_priv)			(INTEL_PCH_TYPE(dev_priv) == PCH_CNP)

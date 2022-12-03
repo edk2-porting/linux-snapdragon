@@ -95,6 +95,7 @@ static const struct goodix_chip_data gt9x_chip_data = {
 
 static const struct goodix_chip_id goodix_chip_ids[] = {
 	{ .id = "1151", .data = &gt1x_chip_data },
+	{ .id = "1158", .data = &gt1x_chip_data },
 	{ .id = "5663", .data = &gt1x_chip_data },
 	{ .id = "5688", .data = &gt1x_chip_data },
 	{ .id = "917S", .data = &gt1x_chip_data },
@@ -298,32 +299,17 @@ static int goodix_ts_read_input_report(struct goodix_ts_data *ts, u8 *data)
 	return -ENOMSG;
 }
 
-static struct input_dev *goodix_create_pen_input(struct goodix_ts_data *ts)
+static int goodix_create_pen_input(struct goodix_ts_data *ts)
 {
 	struct device *dev = &ts->client->dev;
 	struct input_dev *input;
 
 	input = devm_input_allocate_device(dev);
 	if (!input)
-		return NULL;
+		return -ENOMEM;
 
-	input_alloc_absinfo(input);
-	if (!input->absinfo) {
-		input_free_device(input);
-		return NULL;
-	}
-
-	input->absinfo[ABS_X] = ts->input_dev->absinfo[ABS_MT_POSITION_X];
-	input->absinfo[ABS_Y] = ts->input_dev->absinfo[ABS_MT_POSITION_Y];
-	__set_bit(ABS_X, input->absbit);
-	__set_bit(ABS_Y, input->absbit);
-	input_set_abs_params(input, ABS_PRESSURE, 0, 255, 0, 0);
-
-	input_set_capability(input, EV_KEY, BTN_TOUCH);
-	input_set_capability(input, EV_KEY, BTN_TOOL_PEN);
-	input_set_capability(input, EV_KEY, BTN_STYLUS);
-	input_set_capability(input, EV_KEY, BTN_STYLUS2);
-	__set_bit(INPUT_PROP_DIRECT, input->propbit);
+	input_copy_abs(input, ABS_X, ts->input_dev, ABS_MT_POSITION_X);
+	input_copy_abs(input, ABS_Y, ts->input_dev, ABS_MT_POSITION_Y);
 	/*
 	 * The resolution of these touchscreens is about 10 units/mm, the actual
 	 * resolution does not matter much since we set INPUT_PROP_DIRECT.
@@ -331,6 +317,13 @@ static struct input_dev *goodix_create_pen_input(struct goodix_ts_data *ts)
 	 */
 	input_abs_set_res(input, ABS_X, 10);
 	input_abs_set_res(input, ABS_Y, 10);
+	input_set_abs_params(input, ABS_PRESSURE, 0, 255, 0, 0);
+
+	input_set_capability(input, EV_KEY, BTN_TOUCH);
+	input_set_capability(input, EV_KEY, BTN_TOOL_PEN);
+	input_set_capability(input, EV_KEY, BTN_STYLUS);
+	input_set_capability(input, EV_KEY, BTN_STYLUS2);
+	__set_bit(INPUT_PROP_DIRECT, input->propbit);
 
 	input->name = "Goodix Active Pen";
 	input->phys = "input/pen";
@@ -340,24 +333,22 @@ static struct input_dev *goodix_create_pen_input(struct goodix_ts_data *ts)
 		input->id.product = 0x1001;
 	input->id.version = ts->version;
 
-	if (input_register_device(input) != 0) {
-		input_free_device(input);
-		return NULL;
-	}
-
-	return input;
+	ts->input_pen = input;
+	return 0;
 }
 
 static void goodix_ts_report_pen_down(struct goodix_ts_data *ts, u8 *data)
 {
-	int input_x, input_y, input_w;
+	int input_x, input_y, input_w, error;
 	u8 key_value;
 
-	if (!ts->input_pen) {
-		ts->input_pen = goodix_create_pen_input(ts);
-		if (!ts->input_pen)
-			return;
+	if (!ts->pen_input_registered) {
+		error = input_register_device(ts->input_pen);
+		ts->pen_input_registered = (error == 0) ? 1 : error;
 	}
+
+	if (ts->pen_input_registered < 0)
+		return;
 
 	if (ts->contact_size == 9) {
 		input_x = get_unaligned_le16(&data[4]);
@@ -832,22 +823,16 @@ static int goodix_resource(struct acpi_resource *ares, void *data)
 	struct device *dev = &ts->client->dev;
 	struct acpi_resource_gpio *gpio;
 
-	switch (ares->type) {
-	case ACPI_RESOURCE_TYPE_GPIO:
-		gpio = &ares->data.gpio;
-		if (gpio->connection_type == ACPI_RESOURCE_GPIO_TYPE_INT) {
-			if (ts->gpio_int_idx == -1) {
-				ts->gpio_int_idx = ts->gpio_count;
-			} else {
-				dev_err(dev, "More then one GpioInt resource, ignoring ACPI GPIO resources\n");
-				ts->gpio_int_idx = -2;
-			}
+	if (acpi_gpio_get_irq_resource(ares, &gpio)) {
+		if (ts->gpio_int_idx == -1) {
+			ts->gpio_int_idx = ts->gpio_count;
+		} else {
+			dev_err(dev, "More then one GpioInt resource, ignoring ACPI GPIO resources\n");
+			ts->gpio_int_idx = -2;
 		}
 		ts->gpio_count++;
-		break;
-	default:
-		break;
-	}
+	} else if (acpi_gpio_get_io_resource(ares, &gpio))
+		ts->gpio_count++;
 
 	return 0;
 }
@@ -910,6 +895,11 @@ static int goodix_add_acpi_gpio_mappings(struct goodix_ts_data *ts)
 	} else {
 		dev_warn(dev, "Unexpected ACPI resources: gpio_count %d, gpio_int_idx %d\n",
 			 ts->gpio_count, ts->gpio_int_idx);
+		/*
+		 * On some devices _PS0 does a reset for us and
+		 * sometimes this is necessary for things to work.
+		 */
+		acpi_device_fix_up_power(ACPI_COMPANION(dev));
 		return -EINVAL;
 	}
 
@@ -1215,6 +1205,17 @@ static int goodix_configure_dev(struct goodix_ts_data *ts)
 		return error;
 	}
 
+	/*
+	 * Create the input_pen device before goodix_request_irq() calls
+	 * devm_request_threaded_irq() so that the devm framework frees
+	 * it after disabling the irq.
+	 * Unfortunately there is no way to detect if the touchscreen has pen
+	 * support, so registering the dev is delayed till the first pen event.
+	 */
+	error = goodix_create_pen_input(ts);
+	if (error)
+		return error;
+
 	ts->irq_flags = goodix_irq_flags[ts->int_trigger_type] | IRQF_ONESHOT;
 	error = goodix_request_irq(ts);
 	if (error) {
@@ -1508,6 +1509,7 @@ MODULE_DEVICE_TABLE(acpi, goodix_acpi_match);
 #ifdef CONFIG_OF
 static const struct of_device_id goodix_of_match[] = {
 	{ .compatible = "goodix,gt1151" },
+	{ .compatible = "goodix,gt1158" },
 	{ .compatible = "goodix,gt5663" },
 	{ .compatible = "goodix,gt5688" },
 	{ .compatible = "goodix,gt911" },

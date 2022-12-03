@@ -176,6 +176,7 @@ static int trace_define_generic_fields(void)
 
 	__generic_field(int, CPU, FILTER_CPU);
 	__generic_field(int, cpu, FILTER_CPU);
+	__generic_field(int, common_cpu, FILTER_CPU);
 	__generic_field(char *, COMM, FILTER_COMM);
 	__generic_field(char *, comm, FILTER_COMM);
 
@@ -407,7 +408,14 @@ static void test_event_printk(struct trace_event_call *call)
 				a = strchr(fmt + i, '&');
 				if ((a && (a < r)) || test_field(r, call))
 					dereference_flags &= ~(1ULL << arg);
+			} else if ((r = strstr(fmt + i, "__get_dynamic_array(")) &&
+				   (!c || r < c)) {
+				dereference_flags &= ~(1ULL << arg);
+			} else if ((r = strstr(fmt + i, "__get_sockaddr(")) &&
+				   (!c || r < c)) {
+				dereference_flags &= ~(1ULL << arg);
 			}
+
 		next_arg:
 			i--;
 			arg++;
@@ -767,7 +775,9 @@ void trace_event_follow_fork(struct trace_array *tr, bool enable)
 
 static void
 event_filter_pid_sched_switch_probe_pre(void *data, bool preempt,
-		    struct task_struct *prev, struct task_struct *next)
+					struct task_struct *prev,
+					struct task_struct *next,
+					unsigned int prev_state)
 {
 	struct trace_array *tr = data;
 	struct trace_pid_list *no_pid_list;
@@ -791,7 +801,9 @@ event_filter_pid_sched_switch_probe_pre(void *data, bool preempt,
 
 static void
 event_filter_pid_sched_switch_probe_post(void *data, bool preempt,
-		    struct task_struct *prev, struct task_struct *next)
+					 struct task_struct *prev,
+					 struct task_struct *next,
+					 unsigned int prev_state)
 {
 	struct trace_array *tr = data;
 	struct trace_pid_list *no_pid_list;
@@ -1713,9 +1725,9 @@ static LIST_HEAD(event_subsystems);
 
 static int subsystem_open(struct inode *inode, struct file *filp)
 {
+	struct trace_subsystem_dir *dir = NULL, *iter_dir;
+	struct trace_array *tr = NULL, *iter_tr;
 	struct event_subsystem *system = NULL;
-	struct trace_subsystem_dir *dir = NULL; /* Initialize for gcc */
-	struct trace_array *tr;
 	int ret;
 
 	if (tracing_is_disabled())
@@ -1724,10 +1736,12 @@ static int subsystem_open(struct inode *inode, struct file *filp)
 	/* Make sure the system still exists */
 	mutex_lock(&event_mutex);
 	mutex_lock(&trace_types_lock);
-	list_for_each_entry(tr, &ftrace_trace_arrays, list) {
-		list_for_each_entry(dir, &tr->systems, list) {
-			if (dir == inode->i_private) {
+	list_for_each_entry(iter_tr, &ftrace_trace_arrays, list) {
+		list_for_each_entry(iter_dir, &iter_tr->systems, list) {
+			if (iter_dir == inode->i_private) {
 				/* Don't open systems with no events */
+				tr = iter_tr;
+				dir = iter_dir;
 				if (dir->nr_events) {
 					__get_system_dir(dir);
 					system = dir->subsystem;
@@ -1742,9 +1756,6 @@ static int subsystem_open(struct inode *inode, struct file *filp)
 
 	if (!system)
 		return -ENODEV;
-
-	/* Some versions of gcc think dir can be uninitialized here */
-	WARN_ON(!dir);
 
 	/* Still need to increment the ref count of the system */
 	if (trace_array_get(tr) < 0) {
@@ -2270,8 +2281,8 @@ static struct dentry *
 event_subsystem_dir(struct trace_array *tr, const char *name,
 		    struct trace_event_file *file, struct dentry *parent)
 {
+	struct event_subsystem *system, *iter;
 	struct trace_subsystem_dir *dir;
-	struct event_subsystem *system;
 	struct dentry *entry;
 
 	/* First see if we did not already create this dir */
@@ -2285,13 +2296,13 @@ event_subsystem_dir(struct trace_array *tr, const char *name,
 	}
 
 	/* Now see if the system itself exists. */
-	list_for_each_entry(system, &event_subsystems, list) {
-		if (strcmp(system->name, name) == 0)
+	system = NULL;
+	list_for_each_entry(iter, &event_subsystems, list) {
+		if (strcmp(iter->name, name) == 0) {
+			system = iter;
 			break;
+		}
 	}
-	/* Reset system variable when not found */
-	if (&system->list == &event_subsystems)
-		system = NULL;
 
 	dir = kmalloc(sizeof(*dir), GFP_KERNEL);
 	if (!dir)
@@ -2837,6 +2848,7 @@ int trace_add_event_call(struct trace_event_call *call)
 	mutex_unlock(&trace_types_lock);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(trace_add_event_call);
 
 /*
  * Must be called under locking of trace_types_lock, event_mutex and
@@ -2898,6 +2910,7 @@ int trace_remove_event_call(struct trace_event_call *call)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(trace_remove_event_call);
 
 #define for_each_event(event, start, end)			\
 	for (event = start;					\
@@ -3534,12 +3547,10 @@ create_event_toplevel_files(struct dentry *parent, struct trace_array *tr)
 	struct dentry *d_events;
 	struct dentry *entry;
 
-	entry = tracefs_create_file("set_event", TRACE_MODE_WRITE, parent,
-				    tr, &ftrace_set_event_fops);
-	if (!entry) {
-		pr_warn("Could not create tracefs 'set_event' entry\n");
+	entry = trace_create_file("set_event", TRACE_MODE_WRITE, parent,
+				  tr, &ftrace_set_event_fops);
+	if (!entry)
 		return -ENOMEM;
-	}
 
 	d_events = tracefs_create_dir("events", parent);
 	if (!d_events) {
@@ -3554,16 +3565,12 @@ create_event_toplevel_files(struct dentry *parent, struct trace_array *tr)
 
 	/* There are not as crucial, just warn if they are not created */
 
-	entry = tracefs_create_file("set_event_pid", TRACE_MODE_WRITE, parent,
-				    tr, &ftrace_set_event_pid_fops);
-	if (!entry)
-		pr_warn("Could not create tracefs 'set_event_pid' entry\n");
+	trace_create_file("set_event_pid", TRACE_MODE_WRITE, parent,
+			  tr, &ftrace_set_event_pid_fops);
 
-	entry = tracefs_create_file("set_event_notrace_pid",
-				    TRACE_MODE_WRITE, parent, tr,
-				    &ftrace_set_event_notrace_pid_fops);
-	if (!entry)
-		pr_warn("Could not create tracefs 'set_event_notrace_pid' entry\n");
+	trace_create_file("set_event_notrace_pid",
+			  TRACE_MODE_WRITE, parent, tr,
+			  &ftrace_set_event_notrace_pid_fops);
 
 	/* ring buffer internal formats */
 	trace_create_file("header_page", TRACE_MODE_READ, d_events,
@@ -3778,17 +3785,14 @@ static __init int event_trace_init_fields(void)
 __init int event_trace_init(void)
 {
 	struct trace_array *tr;
-	struct dentry *entry;
 	int ret;
 
 	tr = top_trace_array();
 	if (!tr)
 		return -ENODEV;
 
-	entry = tracefs_create_file("available_events", TRACE_MODE_READ,
-				    NULL, tr, &ftrace_avail_fops);
-	if (!entry)
-		pr_warn("Could not create tracefs 'available_events' entry\n");
+	trace_create_file("available_events", TRACE_MODE_READ,
+			  NULL, tr, &ftrace_avail_fops);
 
 	ret = early_event_add_tracer(NULL, tr);
 	if (ret)

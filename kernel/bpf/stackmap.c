@@ -100,13 +100,11 @@ static struct bpf_map *stack_map_alloc(union bpf_attr *attr)
 		return ERR_PTR(-E2BIG);
 
 	cost = n_buckets * sizeof(struct stack_map_bucket *) + sizeof(*smap);
-	cost += n_buckets * (value_size + sizeof(struct stack_map_bucket));
 	smap = bpf_map_area_alloc(cost, bpf_map_attr_numa_node(attr));
 	if (!smap)
 		return ERR_PTR(-ENOMEM);
 
 	bpf_map_init_from_attr(&smap->map, attr);
-	smap->map.value_size = value_size;
 	smap->n_buckets = n_buckets;
 
 	err = get_callchain_buffers(sysctl_perf_event_max_stack);
@@ -132,7 +130,8 @@ static void stack_map_get_build_id_offset(struct bpf_stack_build_id *id_offs,
 	int i;
 	struct mmap_unlock_irq_work *work = NULL;
 	bool irq_work_busy = bpf_mmap_unlock_get_irq_work(&work);
-	struct vm_area_struct *vma;
+	struct vm_area_struct *vma, *prev_vma = NULL;
+	const char *prev_build_id;
 
 	/* If the irq_work is in use, fall back to report ips. Same
 	 * fallback is used for kernel stack (!user) on a stackmap with
@@ -150,6 +149,12 @@ static void stack_map_get_build_id_offset(struct bpf_stack_build_id *id_offs,
 	}
 
 	for (i = 0; i < trace_nr; i++) {
+		if (range_in_vma(prev_vma, ips[i], ips[i])) {
+			vma = prev_vma;
+			memcpy(id_offs[i].build_id, prev_build_id,
+			       BUILD_ID_SIZE_MAX);
+			goto build_id_valid;
+		}
 		vma = find_vma(current->mm, ips[i]);
 		if (!vma || build_id_parse(vma, id_offs[i].build_id, NULL)) {
 			/* per entry fall back to ips */
@@ -158,9 +163,12 @@ static void stack_map_get_build_id_offset(struct bpf_stack_build_id *id_offs,
 			memset(id_offs[i].build_id, 0, BUILD_ID_SIZE_MAX);
 			continue;
 		}
+build_id_valid:
 		id_offs[i].offset = (vma->vm_pgoff << PAGE_SHIFT) + ips[i]
 			- vma->vm_start;
 		id_offs[i].status = BPF_STACK_BUILD_ID_VALID;
+		prev_vma = vma;
+		prev_build_id = id_offs[i].build_id;
 	}
 	bpf_mmap_unlock_mm(work, current->mm);
 }
@@ -646,7 +654,7 @@ static void stack_map_free(struct bpf_map *map)
 	put_callchain_buffers();
 }
 
-static int stack_trace_map_btf_id;
+BTF_ID_LIST_SINGLE(stack_trace_map_btf_ids, struct, bpf_stack_map)
 const struct bpf_map_ops stack_trace_map_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc = stack_map_alloc,
@@ -656,6 +664,5 @@ const struct bpf_map_ops stack_trace_map_ops = {
 	.map_update_elem = stack_map_update_elem,
 	.map_delete_elem = stack_map_delete_elem,
 	.map_check_btf = map_check_no_btf,
-	.map_btf_name = "bpf_stack_map",
-	.map_btf_id = &stack_trace_map_btf_id,
+	.map_btf_id = &stack_trace_map_btf_ids[0],
 };

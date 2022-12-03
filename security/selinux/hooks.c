@@ -25,7 +25,6 @@
 #include <linux/kd.h>
 #include <linux/kernel.h>
 #include <linux/kernel_read_file.h>
-#include <linux/tracehook.h>
 #include <linux/errno.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/task.h>
@@ -92,6 +91,7 @@
 #include <uapi/linux/mount.h>
 #include <linux/fsnotify.h>
 #include <linux/fanotify.h>
+#include <linux/io_uring.h>
 
 #include "avc.h"
 #include "objsec.h"
@@ -146,7 +146,7 @@ static int __init checkreqprot_setup(char *str)
 	if (!kstrtoul(str, 0, &checkreqprot)) {
 		selinux_checkreqprot_boot = checkreqprot ? 1 : 0;
 		if (checkreqprot)
-			pr_warn("SELinux: checkreqprot set to 1 via kernel parameter.  This is deprecated and will be rejected in a future kernel release.\n");
+			pr_err("SELinux: checkreqprot set to 1 via kernel parameter.  This is deprecated and will be rejected in a future kernel release.\n");
 	}
 	return 1;
 }
@@ -211,10 +211,9 @@ static int selinux_lsm_notifier_avc_callback(u32 event)
  */
 static void cred_init_security(void)
 {
-	struct cred *cred = (struct cred *) current->real_cred;
 	struct task_security_struct *tsec;
 
-	tsec = selinux_cred(cred);
+	tsec = selinux_cred(unrcu_pointer(current->real_cred));
 	tsec->osid = tsec->sid = SECINITSID_KERNEL;
 }
 
@@ -341,7 +340,6 @@ static void inode_free_security(struct inode *inode)
 }
 
 struct selinux_mnt_opts {
-	const char *fscontext, *context, *rootcontext, *defcontext;
 	u32 fscontext_sid;
 	u32 context_sid;
 	u32 rootcontext_sid;
@@ -350,12 +348,7 @@ struct selinux_mnt_opts {
 
 static void selinux_free_mnt_opts(void *mnt_opts)
 {
-	struct selinux_mnt_opts *opts = mnt_opts;
-	kfree(opts->fscontext);
-	kfree(opts->context);
-	kfree(opts->rootcontext);
-	kfree(opts->defcontext);
-	kfree(opts);
+	kfree(mnt_opts);
 }
 
 enum {
@@ -602,17 +595,6 @@ static int bad_option(struct superblock_security_struct *sbsec, char flag,
 	return 0;
 }
 
-static int parse_sid(struct super_block *sb, const char *s, u32 *sid)
-{
-	int rc = security_context_str_to_sid(&selinux_state, s,
-					     sid, GFP_KERNEL);
-	if (rc)
-		pr_warn("SELinux: security_context_str_to_sid"
-		       "(%s) failed for (dev %s, type %s) errno=%d\n",
-		       s, sb ? sb->s_id : "?", sb ? sb->s_type->name : "?", rc);
-	return rc;
-}
-
 /*
  * Allow filesystems with binary mount data to explicitly set mount point
  * labeling information.
@@ -659,7 +641,7 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 	 * we need to skip the double mount verification.
 	 *
 	 * This does open a hole in which we will not notice if the first
-	 * mount using this sb set explict options and a second mount using
+	 * mount using this sb set explicit options and a second mount using
 	 * this sb does not set any security options.  (The first options
 	 * will be used for both mounts)
 	 */
@@ -675,37 +657,29 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 	 * than once with different security options.
 	 */
 	if (opts) {
-		if (opts->fscontext) {
-			rc = parse_sid(sb, opts->fscontext, &fscontext_sid);
-			if (rc)
-				goto out;
+		if (opts->fscontext_sid) {
+			fscontext_sid = opts->fscontext_sid;
 			if (bad_option(sbsec, FSCONTEXT_MNT, sbsec->sid,
 					fscontext_sid))
 				goto out_double_mount;
 			sbsec->flags |= FSCONTEXT_MNT;
 		}
-		if (opts->context) {
-			rc = parse_sid(sb, opts->context, &context_sid);
-			if (rc)
-				goto out;
+		if (opts->context_sid) {
+			context_sid = opts->context_sid;
 			if (bad_option(sbsec, CONTEXT_MNT, sbsec->mntpoint_sid,
 					context_sid))
 				goto out_double_mount;
 			sbsec->flags |= CONTEXT_MNT;
 		}
-		if (opts->rootcontext) {
-			rc = parse_sid(sb, opts->rootcontext, &rootcontext_sid);
-			if (rc)
-				goto out;
+		if (opts->rootcontext_sid) {
+			rootcontext_sid = opts->rootcontext_sid;
 			if (bad_option(sbsec, ROOTCONTEXT_MNT, root_isec->sid,
 					rootcontext_sid))
 				goto out_double_mount;
 			sbsec->flags |= ROOTCONTEXT_MNT;
 		}
-		if (opts->defcontext) {
-			rc = parse_sid(sb, opts->defcontext, &defcontext_sid);
-			if (rc)
-				goto out;
+		if (opts->defcontext_sid) {
+			defcontext_sid = opts->defcontext_sid;
 			if (bad_option(sbsec, DEFCONTEXT_MNT, sbsec->def_sid,
 					defcontext_sid))
 				goto out_double_mount;
@@ -971,63 +945,65 @@ out:
 	return rc;
 }
 
+/*
+ * NOTE: the caller is resposible for freeing the memory even if on error.
+ */
 static int selinux_add_opt(int token, const char *s, void **mnt_opts)
 {
 	struct selinux_mnt_opts *opts = *mnt_opts;
-	bool is_alloc_opts = false;
+	u32 *dst_sid;
+	int rc;
 
 	if (token == Opt_seclabel)
 		/* eaten and completely ignored */
 		return 0;
 	if (!s)
-		return -ENOMEM;
+		return -EINVAL;
+
+	if (!selinux_initialized(&selinux_state)) {
+		pr_warn("SELinux: Unable to set superblock options before the security server is initialized\n");
+		return -EINVAL;
+	}
 
 	if (!opts) {
 		opts = kzalloc(sizeof(*opts), GFP_KERNEL);
 		if (!opts)
 			return -ENOMEM;
 		*mnt_opts = opts;
-		is_alloc_opts = true;
 	}
 
 	switch (token) {
 	case Opt_context:
-		if (opts->context || opts->defcontext)
+		if (opts->context_sid || opts->defcontext_sid)
 			goto err;
-		opts->context = s;
-		if (selinux_initialized(&selinux_state))
-			parse_sid(NULL, s, &opts->context_sid);
+		dst_sid = &opts->context_sid;
 		break;
 	case Opt_fscontext:
-		if (opts->fscontext)
+		if (opts->fscontext_sid)
 			goto err;
-		opts->fscontext = s;
-		if (selinux_initialized(&selinux_state))
-			parse_sid(NULL, s, &opts->fscontext_sid);
+		dst_sid = &opts->fscontext_sid;
 		break;
 	case Opt_rootcontext:
-		if (opts->rootcontext)
+		if (opts->rootcontext_sid)
 			goto err;
-		opts->rootcontext = s;
-		if (selinux_initialized(&selinux_state))
-			parse_sid(NULL, s, &opts->rootcontext_sid);
+		dst_sid = &opts->rootcontext_sid;
 		break;
 	case Opt_defcontext:
-		if (opts->context || opts->defcontext)
+		if (opts->context_sid || opts->defcontext_sid)
 			goto err;
-		opts->defcontext = s;
-		if (selinux_initialized(&selinux_state))
-			parse_sid(NULL, s, &opts->defcontext_sid);
+		dst_sid = &opts->defcontext_sid;
 		break;
+	default:
+		WARN_ON(1);
+		return -EINVAL;
 	}
-
-	return 0;
+	rc = security_context_str_to_sid(&selinux_state, s, dst_sid, GFP_KERNEL);
+	if (rc)
+		pr_warn("SELinux: security_context_str_to_sid (%s) failed with errno=%d\n",
+			s, rc);
+	return rc;
 
 err:
-	if (is_alloc_opts) {
-		kfree(opts);
-		*mnt_opts = NULL;
-	}
 	pr_warn(SEL_MOUNT_FAIL_MSG);
 	return -EINVAL;
 }
@@ -1041,7 +1017,7 @@ static int show_sid(struct seq_file *m, u32 sid)
 	rc = security_sid_to_context(&selinux_state, sid,
 					     &context, &len);
 	if (!rc) {
-		bool has_comma = context && strchr(context, ',');
+		bool has_comma = strchr(context, ',');
 
 		seq_putc(m, '=');
 		if (has_comma)
@@ -2542,7 +2518,7 @@ static void selinux_bprm_committed_creds(struct linux_binprm *bprm)
 	if (rc) {
 		clear_itimer();
 
-		spin_lock_irq(&current->sighand->siglock);
+		spin_lock_irq(&unrcu_pointer(current->sighand)->siglock);
 		if (!fatal_signal_pending(current)) {
 			flush_sigqueue(&current->pending);
 			flush_sigqueue(&current->signal->shared_pending);
@@ -2550,13 +2526,13 @@ static void selinux_bprm_committed_creds(struct linux_binprm *bprm)
 			sigemptyset(&current->blocked);
 			recalc_sigpending();
 		}
-		spin_unlock_irq(&current->sighand->siglock);
+		spin_unlock_irq(&unrcu_pointer(current->sighand)->siglock);
 	}
 
 	/* Wake up the parent if it is waiting so that it can recheck
 	 * wait permission to the new task SID. */
 	read_lock(&tasklist_lock);
-	__wake_up_parent(current, current->real_parent);
+	__wake_up_parent(current, unrcu_pointer(current->real_parent));
 	read_unlock(&tasklist_lock);
 }
 
@@ -2622,8 +2598,9 @@ static int selinux_sb_eat_lsm_opts(char *options, void **mnt_opts)
 				}
 			}
 			rc = selinux_add_opt(token, arg, mnt_opts);
+			kfree(arg);
+			arg = NULL;
 			if (unlikely(rc)) {
-				kfree(arg);
 				goto free_opt;
 			}
 		} else {
@@ -2670,37 +2647,27 @@ static int selinux_sb_mnt_opts_compat(struct super_block *sb, void *mnt_opts)
 	if (!opts)
 		return (sbsec->flags & SE_MNTMASK) ? 1 : 0;
 
-	if (opts->fscontext) {
-		if (opts->fscontext_sid == SECSID_NULL)
-			return 1;
-		else if (bad_option(sbsec, FSCONTEXT_MNT, sbsec->sid,
-				       opts->fscontext_sid))
+	if (opts->fscontext_sid) {
+		if (bad_option(sbsec, FSCONTEXT_MNT, sbsec->sid,
+			       opts->fscontext_sid))
 			return 1;
 	}
-	if (opts->context) {
-		if (opts->context_sid == SECSID_NULL)
-			return 1;
-		else if (bad_option(sbsec, CONTEXT_MNT, sbsec->mntpoint_sid,
-				       opts->context_sid))
+	if (opts->context_sid) {
+		if (bad_option(sbsec, CONTEXT_MNT, sbsec->mntpoint_sid,
+			       opts->context_sid))
 			return 1;
 	}
-	if (opts->rootcontext) {
-		if (opts->rootcontext_sid == SECSID_NULL)
-			return 1;
-		else {
-			struct inode_security_struct *root_isec;
+	if (opts->rootcontext_sid) {
+		struct inode_security_struct *root_isec;
 
-			root_isec = backing_inode_security(sb->s_root);
-			if (bad_option(sbsec, ROOTCONTEXT_MNT, root_isec->sid,
-				       opts->rootcontext_sid))
-				return 1;
-		}
-	}
-	if (opts->defcontext) {
-		if (opts->defcontext_sid == SECSID_NULL)
+		root_isec = backing_inode_security(sb->s_root);
+		if (bad_option(sbsec, ROOTCONTEXT_MNT, root_isec->sid,
+			       opts->rootcontext_sid))
 			return 1;
-		else if (bad_option(sbsec, DEFCONTEXT_MNT, sbsec->def_sid,
-				       opts->defcontext_sid))
+	}
+	if (opts->defcontext_sid) {
+		if (bad_option(sbsec, DEFCONTEXT_MNT, sbsec->def_sid,
+			       opts->defcontext_sid))
 			return 1;
 	}
 	return 0;
@@ -2710,8 +2677,6 @@ static int selinux_sb_remount(struct super_block *sb, void *mnt_opts)
 {
 	struct selinux_mnt_opts *opts = mnt_opts;
 	struct superblock_security_struct *sbsec = selinux_superblock(sb);
-	u32 sid;
-	int rc;
 
 	if (!(sbsec->flags & SE_SBINITIALIZED))
 		return 0;
@@ -2719,34 +2684,26 @@ static int selinux_sb_remount(struct super_block *sb, void *mnt_opts)
 	if (!opts)
 		return 0;
 
-	if (opts->fscontext) {
-		rc = parse_sid(sb, opts->fscontext, &sid);
-		if (rc)
-			return rc;
-		if (bad_option(sbsec, FSCONTEXT_MNT, sbsec->sid, sid))
+	if (opts->fscontext_sid) {
+		if (bad_option(sbsec, FSCONTEXT_MNT, sbsec->sid,
+			       opts->fscontext_sid))
 			goto out_bad_option;
 	}
-	if (opts->context) {
-		rc = parse_sid(sb, opts->context, &sid);
-		if (rc)
-			return rc;
-		if (bad_option(sbsec, CONTEXT_MNT, sbsec->mntpoint_sid, sid))
+	if (opts->context_sid) {
+		if (bad_option(sbsec, CONTEXT_MNT, sbsec->mntpoint_sid,
+			       opts->context_sid))
 			goto out_bad_option;
 	}
-	if (opts->rootcontext) {
+	if (opts->rootcontext_sid) {
 		struct inode_security_struct *root_isec;
 		root_isec = backing_inode_security(sb->s_root);
-		rc = parse_sid(sb, opts->rootcontext, &sid);
-		if (rc)
-			return rc;
-		if (bad_option(sbsec, ROOTCONTEXT_MNT, root_isec->sid, sid))
+		if (bad_option(sbsec, ROOTCONTEXT_MNT, root_isec->sid,
+			       opts->rootcontext_sid))
 			goto out_bad_option;
 	}
-	if (opts->defcontext) {
-		rc = parse_sid(sb, opts->defcontext, &sid);
-		if (rc)
-			return rc;
-		if (bad_option(sbsec, DEFCONTEXT_MNT, sbsec->def_sid, sid))
+	if (opts->defcontext_sid) {
+		if (bad_option(sbsec, DEFCONTEXT_MNT, sbsec->def_sid,
+			       opts->defcontext_sid))
 			goto out_bad_option;
 	}
 	return 0;
@@ -2813,38 +2770,12 @@ static int selinux_fs_context_dup(struct fs_context *fc,
 				  struct fs_context *src_fc)
 {
 	const struct selinux_mnt_opts *src = src_fc->security;
-	struct selinux_mnt_opts *opts;
 
 	if (!src)
 		return 0;
 
-	fc->security = kzalloc(sizeof(struct selinux_mnt_opts), GFP_KERNEL);
-	if (!fc->security)
-		return -ENOMEM;
-
-	opts = fc->security;
-
-	if (src->fscontext) {
-		opts->fscontext = kstrdup(src->fscontext, GFP_KERNEL);
-		if (!opts->fscontext)
-			return -ENOMEM;
-	}
-	if (src->context) {
-		opts->context = kstrdup(src->context, GFP_KERNEL);
-		if (!opts->context)
-			return -ENOMEM;
-	}
-	if (src->rootcontext) {
-		opts->rootcontext = kstrdup(src->rootcontext, GFP_KERNEL);
-		if (!opts->rootcontext)
-			return -ENOMEM;
-	}
-	if (src->defcontext) {
-		opts->defcontext = kstrdup(src->defcontext, GFP_KERNEL);
-		if (!opts->defcontext)
-			return -ENOMEM;
-	}
-	return 0;
+	fc->security = kmemdup(src, sizeof(*src), GFP_KERNEL);
+	return fc->security ? 0 : -ENOMEM;
 }
 
 static const struct fs_parameter_spec selinux_fs_parameters[] = {
@@ -2860,17 +2791,13 @@ static int selinux_fs_context_parse_param(struct fs_context *fc,
 					  struct fs_parameter *param)
 {
 	struct fs_parse_result result;
-	int opt, rc;
+	int opt;
 
 	opt = fs_parse(fc, selinux_fs_parameters, param, &result);
 	if (opt < 0)
 		return opt;
 
-	rc = selinux_add_opt(opt, param->string, &fc->security);
-	if (!rc)
-		param->string = NULL;
-
-	return rc;
+	return selinux_add_opt(opt, param->string, &fc->security);
 }
 
 /* inode security operations */
@@ -3032,8 +2959,8 @@ static int selinux_inode_init_security_anon(struct inode *inode,
 	 * allowed to actually create this type of anonymous inode.
 	 */
 
-	ad.type = LSM_AUDIT_DATA_INODE;
-	ad.u.inode = inode;
+	ad.type = LSM_AUDIT_DATA_ANONINODE;
+	ad.u.anonclass = name ? (const char *)name->name : "?";
 
 	return avc_has_perm(&selinux_state,
 			    tsec->sid,
@@ -3351,8 +3278,6 @@ static void selinux_inode_post_setxattr(struct dentry *dentry, const char *name,
 	isec->sid = newsid;
 	isec->initialized = LABEL_INITIALIZED;
 	spin_unlock(&isec->lock);
-
-	return;
 }
 
 static int selinux_inode_getxattr(struct dentry *dentry, const char *name)
@@ -6557,7 +6482,6 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
 			goto abort_change;
 
 		/* Only allow single threaded processes to change context */
-		error = -EPERM;
 		if (!current_is_single_threaded()) {
 			error = security_bounded_transition(&selinux_state,
 							    tsec->sid, sid);
@@ -6866,7 +6790,7 @@ static u32 bpf_map_fmode_to_av(fmode_t fmode)
 }
 
 /* This function will check the file pass through unix socket or binder to see
- * if it is a bpf related object. And apply correspinding checks on the bpf
+ * if it is a bpf related object. And apply corresponding checks on the bpf
  * object based on the type. The bpf maps and programs, not like other files and
  * socket, are using a shared anonymous inode inside the kernel as their inode.
  * So checking that inode cannot identify if the process have privilege to
@@ -7063,6 +6987,28 @@ static int selinux_uring_sqpoll(void)
 
 	return avc_has_perm(&selinux_state, sid, sid,
 			    SECCLASS_IO_URING, IO_URING__SQPOLL, NULL);
+}
+
+/**
+ * selinux_uring_cmd - check if IORING_OP_URING_CMD is allowed
+ * @ioucmd: the io_uring command structure
+ *
+ * Check to see if the current domain is allowed to execute an
+ * IORING_OP_URING_CMD against the device/file specified in @ioucmd.
+ *
+ */
+static int selinux_uring_cmd(struct io_uring_cmd *ioucmd)
+{
+	struct file *file = ioucmd->file;
+	struct inode *inode = file_inode(file);
+	struct inode_security_struct *isec = selinux_inode(inode);
+	struct common_audit_data ad;
+
+	ad.type = LSM_AUDIT_DATA_FILE;
+	ad.u.file = file;
+
+	return avc_has_perm(&selinux_state, current_sid(), isec->sid,
+			    SECCLASS_IO_URING, IO_URING__CMD, &ad);
 }
 #endif /* CONFIG_IO_URING */
 
@@ -7308,6 +7254,7 @@ static struct security_hook_list selinux_hooks[] __lsm_ro_after_init = {
 #ifdef CONFIG_IO_URING
 	LSM_HOOK_INIT(uring_override_creds, selinux_uring_override_creds),
 	LSM_HOOK_INIT(uring_sqpoll, selinux_uring_sqpoll),
+	LSM_HOOK_INIT(uring_cmd, selinux_uring_cmd),
 #endif
 
 	/*
@@ -7364,6 +7311,8 @@ static __init int selinux_init(void)
 
 	memset(&selinux_state, 0, sizeof(selinux_state));
 	enforcing_set(&selinux_state, selinux_enforcing_boot);
+	if (CONFIG_SECURITY_SELINUX_CHECKREQPROT_VALUE)
+		pr_err("SELinux: CONFIG_SECURITY_SELINUX_CHECKREQPROT_VALUE is non-zero.  This is deprecated and will be rejected in a future kernel release.\n");
 	checkreqprot_set(&selinux_state, selinux_checkreqprot_boot);
 	selinux_avc_init(&selinux_state.avc);
 	mutex_init(&selinux_state.status_lock);

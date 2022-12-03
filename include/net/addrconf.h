@@ -64,6 +64,8 @@ struct ifa6_config {
 	const struct in6_addr	*pfx;
 	unsigned int		plen;
 
+	u8			ifa_proto;
+
 	const struct in6_addr	*peer_pfx;
 
 	u32			rt_priority;
@@ -402,6 +404,9 @@ static inline void in6_dev_hold(struct inet6_dev *idev)
 static inline bool ip6_ignore_linkdown(const struct net_device *dev)
 {
 	const struct inet6_dev *idev = __in6_dev_get(dev);
+
+	if (unlikely(!idev))
+		return true;
 
 	return !!idev->cnf.ignore_routes_with_linkdown;
 }

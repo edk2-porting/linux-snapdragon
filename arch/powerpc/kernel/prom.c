@@ -31,7 +31,6 @@
 #include <linux/cpu.h>
 #include <linux/pgtable.h>
 
-#include <asm/prom.h>
 #include <asm/rtas.h>
 #include <asm/page.h>
 #include <asm/processor.h>
@@ -45,7 +44,7 @@
 #include <asm/iommu.h>
 #include <asm/btext.h>
 #include <asm/sections.h>
-#include <asm/machdep.h>
+#include <asm/setup.h>
 #include <asm/pci-bridge.h>
 #include <asm/kexec.h>
 #include <asm/opal.h>
@@ -55,6 +54,7 @@
 #include <asm/dt_cpu_ftrs.h>
 #include <asm/drmem.h>
 #include <asm/ultravisor.h>
+#include <asm/prom.h>
 
 #include <mm/mmu_decl.h>
 
@@ -352,6 +352,9 @@ static int __init early_init_dt_scan_cpus(unsigned long node,
 	    be32_to_cpu(intserv[found_thread]));
 	boot_cpuid = found;
 
+	// Pass the boot CPU's hard CPU id back to our caller
+	*((u32 *)data) = be32_to_cpu(intserv[found_thread]);
+
 	/*
 	 * PAPR defines "logical" PVR values for cpus that
 	 * meet various levels of the architecture:
@@ -388,9 +391,7 @@ static int __init early_init_dt_scan_cpus(unsigned long node,
 		cur_cpu_spec->cpu_features &= ~CPU_FTR_SMT;
 	else if (!dt_cpu_ftrs_in_use())
 		cur_cpu_spec->cpu_features |= CPU_FTR_SMT;
-	allocate_paca(boot_cpuid);
 #endif
-	set_hard_smp_processor_id(found, be32_to_cpu(intserv[found_thread]));
 
 	return 0;
 }
@@ -714,6 +715,7 @@ static inline void save_fscr_to_task(void) {}
 
 void __init early_init_devtree(void *params)
 {
+	u32 boot_cpu_hwid;
 	phys_addr_t limit;
 
 	DBG(" -> early_init_devtree(%px)\n", params);
@@ -750,6 +752,13 @@ void __init early_init_devtree(void *params)
 	early_init_dt_scan_root();
 	early_init_dt_scan_memory_ppc();
 
+	/*
+	 * As generic code authors expect to be able to use static keys
+	 * in early_param() handlers, we initialize the static keys just
+	 * before parsing early params (it's fine to call jump_label_init()
+	 * more than once).
+	 */
+	jump_label_init();
 	parse_early_param();
 
 	/* make sure we've parsed cmdline for mem= before this */
@@ -790,8 +799,6 @@ void __init early_init_devtree(void *params)
 	 * FIXME .. and the initrd too? */
 	move_device_tree();
 
-	allocate_paca_ptrs();
-
 	DBG("Scanning CPUs ...\n");
 
 	dt_cpu_ftrs_scan();
@@ -799,7 +806,7 @@ void __init early_init_devtree(void *params)
 	/* Retrieve CPU related informations from the flat tree
 	 * (altivec support, boot CPU ID, ...)
 	 */
-	of_scan_flat_dt(early_init_dt_scan_cpus, NULL);
+	of_scan_flat_dt(early_init_dt_scan_cpus, &boot_cpu_hwid);
 	if (boot_cpuid < 0) {
 		printk("Failed to identify boot CPU !\n");
 		BUG();
@@ -815,6 +822,11 @@ void __init early_init_devtree(void *params)
 #endif
 
 	mmu_early_init_devtree();
+
+	// NB. paca is not installed until later in early_setup()
+	allocate_paca_ptrs();
+	allocate_paca(boot_cpuid);
+	set_hard_smp_processor_id(boot_cpuid, boot_cpu_hwid);
 
 #ifdef CONFIG_PPC_POWERNV
 	/* Scan and build the list of machine check recoverable ranges */

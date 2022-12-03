@@ -2156,7 +2156,7 @@ static int verify_xena_quiescence(struct s2io_nic *sp)
 
 	/*
 	 * In PCI 33 mode, the P_PLL is not used, and therefore,
-	 * the the P_PLL_LOCK bit in the adapter_status register will
+	 * the P_PLL_LOCK bit in the adapter_status register will
 	 * not be asserted.
 	 */
 	if (!(val64 & ADAPTER_STATUS_P_PLL_LOCK) &&
@@ -3817,7 +3817,7 @@ static irqreturn_t s2io_test_intr(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-/* Test interrupt path by forcing a a software IRQ */
+/* Test interrupt path by forcing a software IRQ */
 static int s2io_test_msi(struct s2io_nic *sp)
 {
 	struct pci_dev *pdev = sp->pdev;
@@ -5492,7 +5492,7 @@ s2io_ethtool_gringparam(struct net_device *dev,
 }
 
 /**
- * s2io_ethtool_getpause_data -Pause frame frame generation and reception.
+ * s2io_ethtool_getpause_data -Pause frame generation and reception.
  * @dev: pointer to netdev
  * @ep : pointer to the structure with pause parameters given by ethtool.
  * Description:
@@ -7128,9 +7128,8 @@ static int s2io_card_up(struct s2io_nic *sp)
 		if (ret) {
 			DBG_PRINT(ERR_DBG, "%s: Out of memory in Open\n",
 				  dev->name);
-			s2io_reset(sp);
-			free_rx_buffers(sp);
-			return -ENOMEM;
+			ret = -ENOMEM;
+			goto err_fill_buff;
 		}
 		DBG_PRINT(INFO_DBG, "Buf in ring:%d is %d:\n", i,
 			  ring->rx_bufs_left);
@@ -7168,18 +7167,16 @@ static int s2io_card_up(struct s2io_nic *sp)
 	/* Enable Rx Traffic and interrupts on the NIC */
 	if (start_nic(sp)) {
 		DBG_PRINT(ERR_DBG, "%s: Starting NIC failed\n", dev->name);
-		s2io_reset(sp);
-		free_rx_buffers(sp);
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_out;
 	}
 
 	/* Add interrupt service routine */
 	if (s2io_add_isr(sp) != 0) {
 		if (sp->config.intr_type == MSI_X)
 			s2io_rem_isr(sp);
-		s2io_reset(sp);
-		free_rx_buffers(sp);
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_out;
 	}
 
 	timer_setup(&sp->alarm_timer, s2io_alarm_handle, 0);
@@ -7199,6 +7196,20 @@ static int s2io_card_up(struct s2io_nic *sp)
 	}
 
 	return 0;
+
+err_out:
+	if (config->napi) {
+		if (config->intr_type == MSI_X) {
+			for (i = 0; i < sp->config.rx_ring_num; i++)
+				napi_disable(&sp->mac_control.rings[i].napi);
+		} else {
+			napi_disable(&sp->napi);
+		}
+	}
+err_fill_buff:
+	s2io_reset(sp);
+	free_rx_buffers(sp);
+	return ret;
 }
 
 /**
@@ -7449,7 +7460,7 @@ aggregate:
  *  @link : inidicates whether link is UP/DOWN.
  *  Description:
  *  This function stops/starts the Tx queue depending on whether the link
- *  status of the NIC is is down or up. This is called by the Alarm
+ *  status of the NIC is down or up. This is called by the Alarm
  *  interrupt handler whenever a link change interrupt comes up.
  *  Return value:
  *  void.
@@ -7732,7 +7743,7 @@ s2io_init_nic(struct pci_dev *pdev, const struct pci_device_id *pre)
 	 * Setting the device configuration parameters.
 	 * Most of these parameters can be specified by the user during
 	 * module insertion as they are module loadable parameters. If
-	 * these parameters are not not specified during load time, they
+	 * these parameters are not specified during load time, they
 	 * are initialized with default values.
 	 */
 	config = &sp->config;

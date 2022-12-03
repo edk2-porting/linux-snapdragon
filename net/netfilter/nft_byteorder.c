@@ -44,7 +44,8 @@ void nft_byteorder_eval(const struct nft_expr *expr,
 		case NFT_BYTEORDER_NTOH:
 			for (i = 0; i < priv->len / 8; i++) {
 				src64 = nft_reg_load64(&src[i]);
-				nft_reg_store64(&dst[i], be64_to_cpu(src64));
+				nft_reg_store64(&dst[i],
+						be64_to_cpu((__force __be64)src64));
 			}
 			break;
 		case NFT_BYTEORDER_HTON:
@@ -172,8 +173,7 @@ static bool nft_byteorder_reduce(struct nft_regs_track *track,
 {
 	struct nft_byteorder *priv = nft_expr_priv(expr);
 
-	track->regs[priv->dreg].selector = NULL;
-	track->regs[priv->dreg].bitwise = NULL;
+	nft_reg_track_cancel(track, priv->dreg, priv->len);
 
 	return false;
 }

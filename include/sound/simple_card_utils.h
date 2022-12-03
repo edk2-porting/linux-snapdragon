@@ -16,6 +16,12 @@
 #define asoc_simple_init_mic(card, sjack, prefix) \
 	asoc_simple_init_jack(card, sjack, 0, prefix, NULL)
 
+struct asoc_simple_tdm_width_map {
+	u8 sample_bits;
+	u8 slot_count;
+	u16 slot_width;
+};
+
 struct asoc_simple_dai {
 	const char *name;
 	unsigned int sysclk;
@@ -25,6 +31,9 @@ struct asoc_simple_dai {
 	unsigned int tx_slot_mask;
 	unsigned int rx_slot_mask;
 	struct clk *clk;
+	bool clk_fixed;
+	struct asoc_simple_tdm_width_map *tdm_width_map;
+	int n_tdm_widths;
 };
 
 struct asoc_simple_data {
@@ -42,7 +51,6 @@ struct prop_nums {
 	int cpus;
 	int codecs;
 	int platforms;
-	int c2c;
 };
 
 struct asoc_simple_priv {
@@ -55,7 +63,6 @@ struct asoc_simple_priv {
 		struct snd_soc_dai_link_component *platforms;
 		struct asoc_simple_data adata;
 		struct snd_soc_codec_conf *codec_conf;
-		struct snd_soc_pcm_stream *c2c_conf;
 		struct prop_nums num;
 		unsigned int mclk_fs;
 	} *dai_props;
@@ -66,7 +73,6 @@ struct asoc_simple_priv {
 	struct snd_soc_dai_link_component *dlcs;
 	struct snd_soc_dai_link_component dummy;
 	struct snd_soc_codec_conf *codec_conf;
-	struct snd_soc_pcm_stream *c2c_conf;
 	struct gpio_desc *pa_gpio;
 	const struct snd_soc_ops *ops;
 	unsigned int dpcm_selectable:1;
@@ -131,6 +137,9 @@ int asoc_simple_parse_daifmt(struct device *dev,
 			     struct device_node *codec,
 			     char *prefix,
 			     unsigned int *retfmt);
+int asoc_simple_parse_tdm_width_map(struct device *dev, struct device_node *np,
+				    struct asoc_simple_dai *dai);
+
 __printf(3, 4)
 int asoc_simple_set_dailink_name(struct device *dev,
 				 struct snd_soc_dai_link *dai_link,
@@ -161,7 +170,7 @@ void asoc_simple_canonicalize_platform(struct snd_soc_dai_link_component *platfo
 void asoc_simple_canonicalize_cpu(struct snd_soc_dai_link_component *cpus,
 				  int is_single_links);
 
-int asoc_simple_clean_reference(struct snd_soc_card *card);
+void asoc_simple_clean_reference(struct snd_soc_card *card);
 
 void asoc_simple_convert_fixup(struct asoc_simple_data *data,
 				      struct snd_pcm_hw_params *params);

@@ -588,7 +588,7 @@ static ssize_t wq_mode_store(struct device *dev,
 	if (sysfs_streq(buf, "dedicated")) {
 		set_bit(WQ_FLAG_DEDICATED, &wq->flags);
 		wq->threshold = 0;
-	} else if (sysfs_streq(buf, "shared") && device_swq_supported(idxd)) {
+	} else if (sysfs_streq(buf, "shared")) {
 		clear_bit(WQ_FLAG_DEDICATED, &wq->flags);
 	} else {
 		return -EINVAL;
@@ -832,6 +832,7 @@ static ssize_t wq_name_store(struct device *dev,
 			     size_t count)
 {
 	struct idxd_wq *wq = confdev_to_wq(dev);
+	char *input, *pos;
 
 	if (wq->state != IDXD_WQ_DISABLED)
 		return -EPERM;
@@ -846,9 +847,14 @@ static ssize_t wq_name_store(struct device *dev,
 	if (wq->type == IDXD_WQT_KERNEL && device_pasid_enabled(wq->idxd))
 		return -EOPNOTSUPP;
 
+	input = kstrndup(buf, count, GFP_KERNEL);
+	if (!input)
+		return -ENOMEM;
+
+	pos = strim(input);
 	memset(wq->name, 0, WQ_NAME_SIZE + 1);
-	strncpy(wq->name, buf, WQ_NAME_SIZE);
-	strreplace(wq->name, '\n', '\0');
+	sprintf(wq->name, "%s", pos);
+	kfree(input);
 	return count;
 }
 
@@ -955,7 +961,7 @@ static ssize_t wq_max_batch_size_store(struct device *dev, struct device_attribu
 	if (batch_size > idxd->max_batch_size)
 		return -EINVAL;
 
-	wq->max_batch_size = (u32)batch_size;
+	idxd_wq_set_max_batch_size(idxd->data->type, wq, (u32)batch_size);
 
 	return count;
 }
@@ -1171,14 +1177,8 @@ static ssize_t op_cap_show(struct device *dev,
 			   struct device_attribute *attr, char *buf)
 {
 	struct idxd_device *idxd = confdev_to_idxd(dev);
-	int i, rc = 0;
 
-	for (i = 0; i < 4; i++)
-		rc += sysfs_emit_at(buf, rc, "%#llx ", idxd->hw.opcap.bits[i]);
-
-	rc--;
-	rc += sysfs_emit_at(buf, rc, "\n");
-	return rc;
+	return sysfs_emit(buf, "%*pb\n", IDXD_MAX_OPCAP_BITS, idxd->opcap_bmap);
 }
 static DEVICE_ATTR_RO(op_cap);
 
@@ -1402,6 +1402,7 @@ static void idxd_conf_device_release(struct device *dev)
 	kfree(idxd->wqs);
 	kfree(idxd->engines);
 	ida_free(&idxd_ida, idxd->id);
+	bitmap_free(idxd->opcap_bmap);
 	kfree(idxd);
 }
 

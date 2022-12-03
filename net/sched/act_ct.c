@@ -57,12 +57,6 @@ static const struct rhashtable_params zones_params = {
 	.automatic_shrinking = true,
 };
 
-static struct nf_ct_ext_type act_ct_extend __read_mostly = {
-	.len		= sizeof(struct nf_conn_act_ct_ext),
-	.align		= __alignof__(struct nf_conn_act_ct_ext),
-	.id		= NF_CT_EXT_ACT_CT,
-};
-
 static struct flow_action_entry *
 tcf_ct_flow_table_flow_action_get_next(struct flow_action *flow_action)
 {
@@ -283,7 +277,7 @@ static struct nf_flowtable_type flowtable_ct = {
 	.owner		= THIS_MODULE,
 };
 
-static int tcf_ct_flow_table_get(struct tcf_ct_params *params)
+static int tcf_ct_flow_table_get(struct net *net, struct tcf_ct_params *params)
 {
 	struct tcf_ct_flow_table *ct_ft;
 	int err = -ENOMEM;
@@ -309,6 +303,7 @@ static int tcf_ct_flow_table_get(struct tcf_ct_params *params)
 	err = nf_flow_table_init(&ct_ft->nf_ft);
 	if (err)
 		goto err_init;
+	write_pnet(&ct_ft->nf_ft.net, net);
 
 	__module_get(THIS_MODULE);
 out_unlock:
@@ -426,6 +421,19 @@ static void tcf_ct_flow_table_process_conn(struct tcf_ct_flow_table *ct_ft,
 		break;
 	case IPPROTO_UDP:
 		break;
+#ifdef CONFIG_NF_CT_PROTO_GRE
+	case IPPROTO_GRE: {
+		struct nf_conntrack_tuple *tuple;
+
+		if (ct->status & IPS_NAT_MASK)
+			return;
+		tuple = &ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple;
+		/* No support for GRE v1 */
+		if (tuple->src.u.gre.key || tuple->dst.u.gre.key)
+			return;
+		break;
+	}
+#endif
 	default:
 		return;
 	}
@@ -445,6 +453,8 @@ tcf_ct_flow_table_fill_tuple_ipv4(struct sk_buff *skb,
 	struct flow_ports *ports;
 	unsigned int thoff;
 	struct iphdr *iph;
+	size_t hdrsize;
+	u8 ipproto;
 
 	if (!pskb_network_may_pull(skb, sizeof(*iph)))
 		return false;
@@ -456,29 +466,54 @@ tcf_ct_flow_table_fill_tuple_ipv4(struct sk_buff *skb,
 	    unlikely(thoff != sizeof(struct iphdr)))
 		return false;
 
-	if (iph->protocol != IPPROTO_TCP &&
-	    iph->protocol != IPPROTO_UDP)
+	ipproto = iph->protocol;
+	switch (ipproto) {
+	case IPPROTO_TCP:
+		hdrsize = sizeof(struct tcphdr);
+		break;
+	case IPPROTO_UDP:
+		hdrsize = sizeof(*ports);
+		break;
+#ifdef CONFIG_NF_CT_PROTO_GRE
+	case IPPROTO_GRE:
+		hdrsize = sizeof(struct gre_base_hdr);
+		break;
+#endif
+	default:
 		return false;
+	}
 
 	if (iph->ttl <= 1)
 		return false;
 
-	if (!pskb_network_may_pull(skb, iph->protocol == IPPROTO_TCP ?
-					thoff + sizeof(struct tcphdr) :
-					thoff + sizeof(*ports)))
+	if (!pskb_network_may_pull(skb, thoff + hdrsize))
 		return false;
 
-	iph = ip_hdr(skb);
-	if (iph->protocol == IPPROTO_TCP)
+	switch (ipproto) {
+	case IPPROTO_TCP:
 		*tcph = (void *)(skb_network_header(skb) + thoff);
+		fallthrough;
+	case IPPROTO_UDP:
+		ports = (struct flow_ports *)(skb_network_header(skb) + thoff);
+		tuple->src_port = ports->source;
+		tuple->dst_port = ports->dest;
+		break;
+	case IPPROTO_GRE: {
+		struct gre_base_hdr *greh;
 
-	ports = (struct flow_ports *)(skb_network_header(skb) + thoff);
+		greh = (struct gre_base_hdr *)(skb_network_header(skb) + thoff);
+		if ((greh->flags & GRE_VERSION) != GRE_VERSION_0)
+			return false;
+		break;
+	}
+	}
+
+	iph = ip_hdr(skb);
+
 	tuple->src_v4.s_addr = iph->saddr;
 	tuple->dst_v4.s_addr = iph->daddr;
-	tuple->src_port = ports->source;
-	tuple->dst_port = ports->dest;
 	tuple->l3proto = AF_INET;
-	tuple->l4proto = iph->protocol;
+	tuple->l4proto = ipproto;
 
 	return true;
 }
@@ -491,36 +526,63 @@ tcf_ct_flow_table_fill_tuple_ipv6(struct sk_buff *skb,
 	struct flow_ports *ports;
 	struct ipv6hdr *ip6h;
 	unsigned int thoff;
+	size_t hdrsize;
+	u8 nexthdr;
 
 	if (!pskb_network_may_pull(skb, sizeof(*ip6h)))
 		return false;
 
 	ip6h = ipv6_hdr(skb);
+	thoff = sizeof(*ip6h);
 
-	if (ip6h->nexthdr != IPPROTO_TCP &&
-	    ip6h->nexthdr != IPPROTO_UDP)
+	nexthdr = ip6h->nexthdr;
+	switch (nexthdr) {
+	case IPPROTO_TCP:
+		hdrsize = sizeof(struct tcphdr);
+		break;
+	case IPPROTO_UDP:
+		hdrsize = sizeof(*ports);
+		break;
+#ifdef CONFIG_NF_CT_PROTO_GRE
+	case IPPROTO_GRE:
+		hdrsize = sizeof(struct gre_base_hdr);
+		break;
+#endif
+	default:
 		return false;
+	}
 
 	if (ip6h->hop_limit <= 1)
 		return false;
 
-	thoff = sizeof(*ip6h);
-	if (!pskb_network_may_pull(skb, ip6h->nexthdr == IPPROTO_TCP ?
-					thoff + sizeof(struct tcphdr) :
-					thoff + sizeof(*ports)))
+	if (!pskb_network_may_pull(skb, thoff + hdrsize))
 		return false;
 
-	ip6h = ipv6_hdr(skb);
-	if (ip6h->nexthdr == IPPROTO_TCP)
+	switch (nexthdr) {
+	case IPPROTO_TCP:
 		*tcph = (void *)(skb_network_header(skb) + thoff);
+		fallthrough;
+	case IPPROTO_UDP:
+		ports = (struct flow_ports *)(skb_network_header(skb) + thoff);
+		tuple->src_port = ports->source;
+		tuple->dst_port = ports->dest;
+		break;
+	case IPPROTO_GRE: {
+		struct gre_base_hdr *greh;
 
-	ports = (struct flow_ports *)(skb_network_header(skb) + thoff);
+		greh = (struct gre_base_hdr *)(skb_network_header(skb) + thoff);
+		if ((greh->flags & GRE_VERSION) != GRE_VERSION_0)
+			return false;
+		break;
+	}
+	}
+
+	ip6h = ipv6_hdr(skb);
+
 	tuple->src_v6 = ip6h->saddr;
 	tuple->dst_v6 = ip6h->daddr;
-	tuple->src_port = ports->source;
-	tuple->dst_port = ports->dest;
 	tuple->l3proto = AF_INET6;
-	tuple->l4proto = ip6h->nexthdr;
+	tuple->l4proto = nexthdr;
 
 	return true;
 }
@@ -1330,9 +1392,9 @@ static int tcf_ct_init(struct net *net, struct nlattr *nla,
 	if (err)
 		goto cleanup;
 
-	err = tcf_ct_flow_table_get(params);
+	err = tcf_ct_flow_table_get(net, params);
 	if (err)
-		goto cleanup;
+		goto cleanup_params;
 
 	spin_lock_bh(&c->tcf_lock);
 	goto_ch = tcf_action_set_ctrlact(*a, parm->action, goto_ch);
@@ -1347,6 +1409,9 @@ static int tcf_ct_init(struct net *net, struct nlattr *nla,
 
 	return res;
 
+cleanup_params:
+	if (params->tmpl)
+		nf_ct_put(params->tmpl);
 cleanup:
 	if (goto_ch)
 		tcf_chain_put_by_act(goto_ch);
@@ -1523,7 +1588,8 @@ static void tcf_stats_update(struct tc_action *a, u64 bytes, u64 packets,
 }
 
 static int tcf_ct_offload_act_setup(struct tc_action *act, void *entry_data,
-				    u32 *index_inc, bool bind)
+				    u32 *index_inc, bool bind,
+				    struct netlink_ext_ack *extack)
 {
 	if (bind) {
 		struct flow_action_entry *entry = entry_data;
@@ -1611,16 +1677,10 @@ static int __init ct_init_module(void)
 	if (err)
 		goto err_register;
 
-	err = nf_ct_extend_register(&act_ct_extend);
-	if (err)
-		goto err_register_extend;
-
 	static_branch_inc(&tcf_frag_xmit_count);
 
 	return 0;
 
-err_register_extend:
-	tcf_unregister_action(&act_ct_ops, &ct_net_ops);
 err_register:
 	tcf_ct_flow_tables_uninit();
 err_tbl_init:
@@ -1631,7 +1691,6 @@ err_tbl_init:
 static void __exit ct_cleanup_module(void)
 {
 	static_branch_dec(&tcf_frag_xmit_count);
-	nf_ct_extend_unregister(&act_ct_extend);
 	tcf_unregister_action(&act_ct_ops, &ct_net_ops);
 	tcf_ct_flow_tables_uninit();
 	destroy_workqueue(act_ct_wq);

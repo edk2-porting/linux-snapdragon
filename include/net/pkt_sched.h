@@ -63,12 +63,6 @@ static inline psched_time_t psched_get_time(void)
 	return PSCHED_NS2TICKS(ktime_get_ns());
 }
 
-static inline psched_tdiff_t
-psched_tdiff_bounded(psched_time_t tv1, psched_time_t tv2, psched_time_t bound)
-{
-	return min(tv1 - tv2, bound);
-}
-
 struct qdisc_watchdog {
 	u64		last_expires;
 	struct hrtimer	timer;
@@ -179,10 +173,27 @@ struct tc_taprio_qopt_offload {
 	struct tc_taprio_sched_entry entries[];
 };
 
+#if IS_ENABLED(CONFIG_NET_SCH_TAPRIO)
+
 /* Reference counting */
 struct tc_taprio_qopt_offload *taprio_offload_get(struct tc_taprio_qopt_offload
 						  *offload);
 void taprio_offload_free(struct tc_taprio_qopt_offload *offload);
+
+#else
+
+/* Reference counting */
+static inline struct tc_taprio_qopt_offload *
+taprio_offload_get(struct tc_taprio_qopt_offload *offload)
+{
+	return NULL;
+}
+
+static inline void taprio_offload_free(struct tc_taprio_qopt_offload *offload)
+{
+}
+
+#endif
 
 /* Ensure skb_mstamp_ns, which might have been populated with the txtime, is
  * not mistaken for a software timestamp, because this will otherwise prevent
