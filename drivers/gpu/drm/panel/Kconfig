@@ -377,6 +377,18 @@ config DRM_PANEL_NOVATEK_NT39016
 	  Say Y here if you want to enable support for the panels built
 	  around the Novatek NT39016 display controller.
 
+config DRM_PANEL_NT51021_BOE_WUXGA
+	tristate "NT51021 BOE WUXGA panels"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	select VIDEOMODE_HELPERS
+	help
+	  Say Y or M here if you want to enable support for the TFT LCD
+	  panel found in the Xiaomi Mi Pad 4.
+
+	  The panels are 1920x1200@60Hz respectively
+
 config DRM_PANEL_MANTIX_MLAF057WE51
 	tristate "Mantix MLAF057WE51-X MIPI-DSI LCD panel"
 	depends on OF
